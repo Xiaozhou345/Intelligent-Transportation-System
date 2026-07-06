@@ -1,0 +1,126 @@
+# Python
+*.py[cod]
+*$py.class
+__pycache__/
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+*.whl
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.dmypy.json
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv/
+virtualenv/
+
+# AI Models (大文件不提交)
+*.pth
+*.pt
+*.onnx
+*.h5
+*.pb
+*.tflite
+*.weights
+*.caffemodel
+models/
+checkpoints/
+weights/
+
+# Video Files (视频文件不提交)
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.flv
+*.wmv
+*.webm
+videos/
+uploads/
+streams/
+
+# Image Files (大量图片不提交，根据需要调整)
+# *.jpg
+# *.jpeg
+# *.png
+# *.bmp
+dataset/
+data/raw/
+
+# Logs
+*.log
+logs/
+*.log.*
+
+# Environment Variables & Config
+.env
+.env.local
+.env.*.local
+config.ini
+secrets.json
+credentials.json
+
+# IDE & Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.sublime-project
+*.sublime-workspace
+
+# Node.js & Frontend
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+dist/
+build/
+.cache/
+.parcel-cache/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Temporary Files
+tmp/
+temp/
+*.tmp
+*.bak
+*.cache
+
+# System Files
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Redis
+dump.rdb
+
+# Docker
+docker-compose.override.yml
+
+# Testing
+.coverage
+coverage/
+test-results/
