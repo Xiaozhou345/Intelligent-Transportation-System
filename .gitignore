@@ -71,6 +71,7 @@ logs/
 config.ini
 secrets.json
 credentials.json
+edge_member_a/config.json
 
 # IDE & Editor
 .vscode/

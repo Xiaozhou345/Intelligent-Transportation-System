@@ -1,0 +1,16 @@
+{
+  "cloud_api_base": "http://192.168.1.100:5000",
+  "rtmp_server": "192.168.1.100",
+  "rtmp_port": 1935,
+  "rtmp_app": "live",
+  "device_id": "mobile_001",
+  "device_type": "huawei_tablet",
+  "scene_id": "scene_704_sandbox",
+  "resolution": "1280x720",
+  "fps": 15,
+  "codec": "H.264",
+  "bitrate": "2Mbps",
+  "heartbeat_interval_seconds": 10,
+  "request_timeout_seconds": 5,
+  "upload_endpoint": "/api/video/upload"
+}
