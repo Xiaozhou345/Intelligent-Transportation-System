@@ -1,0 +1,23 @@
+# 云端AI分析引擎依赖包
+
+# 深度学习框架
+torch>=1.8.0
+torchvision>=0.9.0
+
+# 计算机视觉
+opencv-python>=4.6.0
+numpy>=1.23.0
+Pillow>=7.1.2
+
+# YOLO相关
+ultralytics>=8.0.0
+
+# 工具库
+imutils>=0.5.4
+scipy>=1.7.0
+
+# 可选：GPU加速
+# onnxruntime-gpu
+
+# 其他
+tqdm
