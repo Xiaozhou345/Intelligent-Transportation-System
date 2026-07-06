@@ -21,7 +21,7 @@ class VehicleDetector:
     def __init__(self, model_path='yolo11s.pt', conf_threshold=0.5):
         """
         初始化车辆检测器
-        
+
         Args:
             model_path: YOLO模型权重路径
             conf_threshold: 置信度阈值
@@ -29,7 +29,12 @@ class VehicleDetector:
         print(f"正在加载YOLOv11模型: {model_path}")
         self.model = YOLO(model_path)
         self.conf_threshold = conf_threshold
-        print("车辆检测器初始化完成")
+
+        # 自动选择GPU或CPU
+        import torch
+        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.model.to(self.device)
+        print(f"车辆检测器初始化完成 (设备: {self.device})")
     
     def detect(self, frame):
         """
