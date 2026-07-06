@@ -25,6 +25,7 @@ def test_register_device():
 
     device_data = {
         "device_id": "mobile_001",
+        "device_type": "huawei_tablet",
         "stream_url": "rtmp://192.168.1.100:1935/live/stream_001",
         "resolution": "1280x720",
         "fps": 15,

@@ -11,8 +11,8 @@ class Device:
     """设备信息类"""
 
     def __init__(self, device_id: str, stream_url: str, resolution: str,
-                 fps: int, scene_id: str, codec: str = "H.264",
-                 bitrate: str = "2Mbps"):
+                 fps: int, scene_id: str, device_type: str = "unknown",
+                 codec: str = "H.264", bitrate: str = "2Mbps"):
         """
         初始化设备信息
 
@@ -22,10 +22,12 @@ class Device:
             resolution: 分辨率（如：1280x720）
             fps: 帧率
             scene_id: 场景标识
+            device_type: 设备类型（如：huawei_tablet, iphone_13等）
             codec: 编码格式
             bitrate: 码率
         """
         self.device_id = device_id
+        self.device_type = device_type
         self.stream_url = stream_url
         self.resolution = resolution
         self.fps = fps
@@ -40,6 +42,7 @@ class Device:
         """转换为字典"""
         return {
             "device_id": self.device_id,
+            "device_type": self.device_type,
             "stream_url": self.stream_url,
             "resolution": self.resolution,
             "fps": self.fps,
@@ -68,7 +71,8 @@ class DeviceManager:
 
     def register_device(self, device_id: str, stream_url: str,
                        resolution: str, fps: int, scene_id: str,
-                       codec: str = "H.264", bitrate: str = "2Mbps") -> bool:
+                       device_type: str = "unknown", codec: str = "H.264",
+                       bitrate: str = "2Mbps") -> bool:
         """
         注册新设备
 
@@ -78,6 +82,7 @@ class DeviceManager:
             resolution: 分辨率
             fps: 帧率
             scene_id: 场景ID
+            device_type: 设备类型
             codec: 编码格式
             bitrate: 码率
 
@@ -96,6 +101,7 @@ class DeviceManager:
                 resolution=resolution,
                 fps=fps,
                 scene_id=scene_id,
+                device_type=device_type,
                 codec=codec,
                 bitrate=bitrate
             )
@@ -182,6 +188,7 @@ if __name__ == '__main__':
     # 注册设备
     manager.register_device(
         device_id="mobile_001",
+        device_type="huawei_tablet",
         stream_url="rtmp://192.168.1.100:1935/live/stream_001",
         resolution="1280x720",
         fps=15,

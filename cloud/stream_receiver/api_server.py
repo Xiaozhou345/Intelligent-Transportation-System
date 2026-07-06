@@ -24,6 +24,7 @@ def register_device():
     请求体示例：
     {
         "device_id": "mobile_001",
+        "device_type": "huawei_tablet",
         "stream_url": "rtmp://192.168.1.100:1935/live/stream_001",
         "resolution": "1280x720",
         "fps": 15,
@@ -51,6 +52,7 @@ def register_device():
         scene_id = data.get('scene_id', 'default')
 
         # 可选字段
+        device_type = data.get('device_type', 'unknown')
         codec = data.get('codec', 'H.264')
         bitrate = data.get('bitrate', '2Mbps')
 
@@ -68,6 +70,7 @@ def register_device():
             resolution=resolution,
             fps=fps,
             scene_id=scene_id,
+            device_type=device_type,
             codec=codec,
             bitrate=bitrate
         )
