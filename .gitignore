@@ -38,6 +38,7 @@ virtualenv/
 models/
 checkpoints/
 weights/
+runs/
 
 # Video Files (视频文件不提交)
 *.mp4

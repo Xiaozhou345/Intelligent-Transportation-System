@@ -10,13 +10,8 @@ import numpy as np
 class VehicleDetector:
     """车辆检测器"""
     
-    # COCO数据集中的车辆类别ID
-    VEHICLE_CLASSES = {
-        2: 'car',
-        3: 'motorcycle', 
-        5: 'bus',
-        7: 'truck'
-    }
+    # COCO 预训练模型中的车辆类别名称；自训练沙盘模型使用 vehicle 类别
+    VEHICLE_NAMES = {'car', 'motorcycle', 'bus', 'truck', 'vehicle'}
     
     def __init__(self, model_path='yolo11s.pt', conf_threshold=0.5):
         """
@@ -59,16 +54,17 @@ class VehicleDetector:
         detections = []
         for box in results[0].boxes:
             cls_id = int(box.cls[0])
-            
-            # 只保留车辆类别
-            if cls_id in self.VEHICLE_CLASSES:
+            class_name = self.model.names.get(cls_id, str(cls_id))
+
+            # 只保留车辆类别：兼容 COCO 预训练模型和沙盘自训练模型
+            if class_name in self.VEHICLE_NAMES:
                 x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
                 conf = float(box.conf[0])
-                
+
                 detections.append({
                     'bbox': [int(x1), int(y1), int(x2), int(y2)],
                     'class_id': cls_id,
-                    'class_name': self.VEHICLE_CLASSES[cls_id],
+                    'class_name': class_name,
                     'confidence': conf
                 })
         

@@ -145,6 +145,10 @@ def heartbeat():
         success = device_manager.update_heartbeat(device_id)
 
         if success:
+            device = device_manager.get_device(device_id)
+            if vehicle_processor and device:
+                vehicle_processor.ensure_processing(device_id, device.stream_url)
+
             return jsonify({
                 "status": "success",
                 "message": "心跳更新成功"

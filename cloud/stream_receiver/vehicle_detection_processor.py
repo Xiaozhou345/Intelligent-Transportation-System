@@ -42,18 +42,20 @@ class VehicleDetectionProcessor:
         print("=" * 60)
 
         try:
-            yolo_path = os.path.join(ai_models_dir, 'vehicle_detection', 'yolo11s.pt')
+            sandbox_model_path = os.path.join(ai_models_dir, 'vehicle_detection', 'sandbox_vehicle_best.pt')
+            default_model_path = os.path.join(ai_models_dir, 'vehicle_detection', 'yolo11s.pt')
+            yolo_path = sandbox_model_path if os.path.exists(sandbox_model_path) else default_model_path
             print(f"YOLO权重路径: {yolo_path}")
 
             if not os.path.exists(yolo_path):
                 raise FileNotFoundError(f"YOLO权重文件不存在: {yolo_path}")
 
-            # 降低置信度阈值，适应沙盘小车
-            self.vehicle_detector = VehicleDetector(model_path=yolo_path, conf_threshold=0.25)
+            # 横竖屏增强模型在 0.45 左右可减少横屏和空场景误检
+            self.vehicle_detector = VehicleDetector(model_path=yolo_path, conf_threshold=0.45)
 
             print("=" * 60)
             print("✅ AI模型加载完成！")
-            print("   配置: 沙盘模式 - 低阈值检测 (0.25)")
+            print("   配置: 沙盘模式 - 横竖屏增强检测 (0.45)")
             print("=" * 60)
 
         except Exception as e:
@@ -91,6 +93,13 @@ class VehicleDetectionProcessor:
         print(f"🚀 开始处理设备 {device_id} 的视频流")
         return True
 
+    def ensure_processing(self, device_id, stream_url):
+        """确保指定设备的视频处理线程正在运行"""
+        thread = self.active_streams.get(device_id)
+        if thread and thread.is_alive():
+            return True
+        return self.start_processing(device_id, stream_url)
+
     def stop_processing(self, device_id):
         """停止视频流处理"""
         if device_id not in self.active_streams:
@@ -113,9 +122,28 @@ class VehicleDetectionProcessor:
 
         try:
             print(f"📡 正在连接视频流: {stream_url}")
-            cap = cv2.VideoCapture(stream_url)
 
-            if not cap.isOpened():
+            open_attempts = 0
+            max_open_attempts = 60
+            while not stop_event.is_set() and open_attempts < max_open_attempts:
+                open_attempts += 1
+                cap = cv2.VideoCapture(stream_url)
+
+                if cap.isOpened():
+                    break
+
+                if cap:
+                    cap.release()
+                    cap = None
+
+                if open_attempts == 1 or open_attempts % 5 == 0:
+                    print(
+                        f"⚠️  视频流尚未可读: {stream_url} "
+                        f"(打开尝试 {open_attempts}/{max_open_attempts})"
+                    )
+                time.sleep(1)
+
+            if not cap or not cap.isOpened():
                 print(f"❌ 无法打开视频流: {stream_url}")
                 return
 
