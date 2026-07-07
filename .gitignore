@@ -111,6 +111,7 @@ temp/
 Thumbs.db
 .DS_Store
 desktop.ini
+*:Zone.Identifier
 
 # Jupyter Notebook
 .ipynb_checkpoints/
