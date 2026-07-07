@@ -26,18 +26,10 @@ ENV/
 .venv/
 virtualenv/
 
-# AI Models (大文件不提交)
-*.pth
-*.pt
-*.onnx
-*.h5
-*.pb
-*.tflite
-*.weights
-*.caffemodel
-models/
-checkpoints/
-weights/
+# AI Models (允许提交项目模型权重，便于部署迁移)
+# 注意：GitHub 单文件硬限制约 100MB，超过时需要改用 Git LFS 或外部存储。
+
+# YOLO Training Outputs (训练过程输出不提交，仅提交最终模型和数据集)
 runs/
 
 # Video Files (视频文件不提交)
