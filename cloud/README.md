@@ -66,6 +66,26 @@ cd cloud/ai_models/anomaly_detection
 python3 anomaly_detector.py
 ```
 
+### 测试云端异常检测处理器
+```bash
+cd ..
+python cloud/stream_receiver/test_anomaly_processor.py
+```
+
+调度层复用同一帧时，可直接调用：
+```python
+from cloud.stream_receiver.anomaly_processor import RoadAnomalyProcessor
+
+anomaly_processor = RoadAnomalyProcessor()
+events = anomaly_processor.process_frame(
+    device_id="mobile_001",
+    frame=frame,
+    vehicle_bboxes=vehicle_bboxes
+)
+```
+
+`vehicle_bboxes` 来自车辆检测模型，用于把正常车辆区域从 MOG2 前景图中排除，避免影响车牌识别或其他模型的独立逻辑。
+
 ## 四大业务场景
 
 ### 1. 车牌识别与通行决策

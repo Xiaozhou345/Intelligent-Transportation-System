@@ -9,7 +9,19 @@ import numpy as np
 class AnomalyDetector:
     """道路异常检测器"""
 
-    def __init__(self, history=500, var_threshold=16, detect_shadows=False):
+    def __init__(
+        self,
+        history=500,
+        var_threshold=16,
+        detect_shadows=False,
+        min_area=500,
+        static_frames_threshold=15,
+        match_distance=50,
+        vehicle_mask_padding=4,
+        road_roi=None,
+        warmup_frames=30,
+        learning_rate=0,
+    ):
         """
         初始化异常检测器
 
@@ -17,6 +29,13 @@ class AnomalyDetector:
             history: 背景建模的历史帧数
             var_threshold: 方差阈值
             detect_shadows: 是否检测阴影
+            min_area: 最小异常物体面积
+            static_frames_threshold: 连续静止帧数告警阈值
+            match_distance: 跨帧匹配的中心点距离阈值
+            vehicle_mask_padding: 车辆动态掩膜外扩像素
+            road_roi: 道路区域多边形，None表示全画面
+            warmup_frames: 未手动初始化背景时的自动预热帧数
+            learning_rate: 检测阶段背景更新率，0表示冻结背景
         """
         # MOG2背景建模器
         self.bg_subtractor = cv2.createBackgroundSubtractorMOG2(
@@ -24,10 +43,19 @@ class AnomalyDetector:
             varThreshold=var_threshold,
             detectShadows=detect_shadows
         )
+        self.history = history
+        self.var_threshold = var_threshold
+        self.detect_shadows = detect_shadows
 
         # 异常物体参数
-        self.min_area = 500  # 最小异常物体面积
-        self.static_frames_threshold = 15  # 静止帧数阈值
+        self.min_area = min_area
+        self.static_frames_threshold = static_frames_threshold
+        self.match_distance = match_distance
+        self.vehicle_mask_padding = vehicle_mask_padding
+        self.road_roi = road_roi
+        self.warmup_frames = warmup_frames
+        self.learning_rate = learning_rate
+        self.background_frames = 0
         self.anomaly_id_counter = 0
 
         # 跟踪的异常物体
@@ -43,6 +71,7 @@ class AnomalyDetector:
             frame: 输入图像帧
         """
         self.bg_subtractor.apply(frame)
+        self.background_frames += 1
 
     def detect(self, frame, vehicle_bboxes=None):
         """
@@ -64,8 +93,23 @@ class AnomalyDetector:
                     'status': 'warning' or 'normal'
                 }
         """
-        # 应用背景建模
-        fg_mask = self.bg_subtractor.apply(frame)
+        if frame is None or frame.size == 0:
+            return []
+
+        # 如果外部调度器没有预热背景，前若干帧只用于建模，不触发告警。
+        if self.background_frames < self.warmup_frames:
+            self.update_background(frame)
+            return []
+
+        # 应用背景建模。默认冻结背景，避免静止异物很快被吸收到背景里。
+        fg_mask = self.bg_subtractor.apply(frame, learningRate=self.learning_rate)
+
+        # 只在道路ROI内检测，减少非道路区域误报。
+        if self.road_roi:
+            roi_mask = np.zeros_like(fg_mask)
+            pts = np.array(self.road_roi, dtype=np.int32)
+            cv2.fillPoly(roi_mask, [pts], 255)
+            fg_mask = cv2.bitwise_and(fg_mask, roi_mask)
 
         # 形态学操作去噪
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
@@ -76,7 +120,11 @@ class AnomalyDetector:
         if vehicle_bboxes:
             vehicle_mask = np.zeros_like(fg_mask)
             for bbox in vehicle_bboxes:
-                x1, y1, x2, y2 = map(int, bbox)
+                x1, y1, x2, y2 = self._clip_bbox(bbox, frame.shape)
+                x1 = max(0, x1 - self.vehicle_mask_padding)
+                y1 = max(0, y1 - self.vehicle_mask_padding)
+                x2 = min(frame.shape[1], x2 + self.vehicle_mask_padding)
+                y2 = min(frame.shape[0], y2 + self.vehicle_mask_padding)
                 cv2.rectangle(vehicle_mask, (x1, y1), (x2, y2), 255, -1)
             # 从前景中减去车辆区域
             fg_mask = cv2.bitwise_and(fg_mask, cv2.bitwise_not(vehicle_mask))
@@ -108,7 +156,7 @@ class AnomalyDetector:
                              (center[1] - prev_center[1]) ** 2)
 
                 # 如果距离很近，认为是同一个异常
-                if dist < 50:
+                if dist < self.match_distance:
                     matched = True
                     # 更新静止帧数
                     anomaly_info['static_frames'] += 1
@@ -162,11 +210,26 @@ class AnomalyDetector:
 
         return current_anomalies
 
+    def _clip_bbox(self, bbox, frame_shape):
+        """将bbox裁剪到图像范围内。"""
+        height, width = frame_shape[:2]
+        x1, y1, x2, y2 = map(int, bbox)
+        x1 = max(0, min(width - 1, x1))
+        y1 = max(0, min(height - 1, y1))
+        x2 = max(0, min(width, x2))
+        y2 = max(0, min(height, y2))
+        return x1, y1, x2, y2
+
     def reset(self):
         """重置检测器"""
-        self.bg_subtractor = cv2.createBackgroundSubtractorMOG2()
+        self.bg_subtractor = cv2.createBackgroundSubtractorMOG2(
+            history=self.history,
+            varThreshold=self.var_threshold,
+            detectShadows=self.detect_shadows
+        )
         self.tracked_anomalies = {}
         self.anomaly_id_counter = 0
+        self.background_frames = 0
 
 
 if __name__ == '__main__':

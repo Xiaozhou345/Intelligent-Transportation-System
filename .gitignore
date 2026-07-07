@@ -58,6 +58,12 @@ streams/
 # *.bmp
 dataset/
 data/raw/
+data/sandbox_anomaly/**/*.jpg
+data/sandbox_anomaly/**/*.jpeg
+data/sandbox_anomaly/**/*.png
+data/sandbox_anomaly/**/*.bmp
+data/sandbox_anomaly/**/*.webp
+data/sandbox_anomaly/output/
 
 # Logs
 *.log
