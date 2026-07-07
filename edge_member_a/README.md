@@ -18,6 +18,7 @@
 edge_member_a/
 ├── config.example.json          # 边端配置样例
 ├── edge_client.py               # 设备注册、心跳、注销客户端
+├── stream_monitor.py            # 拉流验证与视频传输状态监控
 ├── segment_upload.py            # HTTP视频段备用上传客户端
 ├── docs/
 │   ├── tablet_rtmp_setup.md     # 平板RTMP推流配置说明
@@ -80,6 +81,43 @@ python edge_member_a\edge_client.py --config edge_member_a\config.json print-con
    ```powershell
    python edge_member_a\edge_client.py --config edge_member_a\config.json unregister
    ```
+
+## 拉流与传输状态监控
+
+老师要求验证“拉流”和“视频传输状态监控”时，先确保：
+
+1. 云端 API 已启动；
+2. MediaMTX / RTMP 服务已启动；
+3. 平板 Larix 已开始推流；
+4. `config.json` 中的 `cloud_api_base` 和 `rtmp_server` 指向同一台云端电脑。
+
+单次检查：
+
+```powershell
+python edge_member_a\stream_monitor.py --config edge_member_a\config.json
+```
+
+持续监控：
+
+```powershell
+python edge_member_a\stream_monitor.py --config edge_member_a\config.json --watch
+```
+
+该脚本会检查：
+
+- 云端 `/api/health` 是否可访问；
+- 当前设备是否已注册；
+- RTMP 端口 `1935` 是否连通；
+- 是否能从 `rtmp://<云端IP>:1935/live/mobile_001` 真正读取视频帧；
+- 读取到的帧数、分辨率和粗略 FPS。
+
+如果输出：
+
+```text
+[OK] rtmp frame pulling
+```
+
+说明云端已经可以拉取并解码平板推送的视频流。
 
 ## 接口对接
 

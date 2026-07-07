@@ -147,27 +147,37 @@ def cmd_watch(config: Dict[str, Any]) -> int:
     interval = int(config.get("heartbeat_interval_seconds", 10))
     timeout = int(config.get("request_timeout_seconds", 5))
 
-    register_result = post_json(
-        config["cloud_api_base"],
-        "/api/register_device",
-        register_payload(config),
-        timeout,
-    )
-    print_response("register", register_result)
-    if not 200 <= register_result["http_status"] < 300:
-        return 1
+    while True:
+        try:
+            register_result = post_json(
+                config["cloud_api_base"],
+                "/api/register_device",
+                register_payload(config),
+                timeout,
+            )
+            print_response("register", register_result)
+            if 200 <= register_result["http_status"] < 300:
+                break
+        except ConnectionError as error:
+            print(f"[register] {error}")
+
+        print(f"Register failed. Retry in {interval}s.")
+        time.sleep(interval)
 
     print(f"Heartbeat started. Press Ctrl+C to stop. interval={interval}s")
     try:
         while True:
             time.sleep(interval)
-            response = post_json(
-                config["cloud_api_base"],
-                "/api/heartbeat",
-                heartbeat_payload(config),
-                timeout,
-            )
-            print_response("heartbeat", response)
+            try:
+                response = post_json(
+                    config["cloud_api_base"],
+                    "/api/heartbeat",
+                    heartbeat_payload(config),
+                    timeout,
+                )
+                print_response("heartbeat", response)
+            except ConnectionError as error:
+                print(f"[heartbeat] {error}. Retry in {interval}s.")
     except KeyboardInterrupt:
         print("\nHeartbeat stopped by user.")
         return 0

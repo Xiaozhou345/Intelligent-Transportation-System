@@ -102,6 +102,7 @@ build/
 # Temporary Files
 tmp/
 temp/
+.tools/
 *.tmp
 *.bak
 *.cache
