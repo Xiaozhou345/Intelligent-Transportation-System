@@ -134,7 +134,7 @@ class WebSocketManager {
     }
 
     // 真实连接模式
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+    if (this.ws && this.ws.connected) {
       return
     }
 

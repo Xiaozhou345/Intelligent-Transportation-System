@@ -20,7 +20,8 @@ const errorMessage = ref('')
 
 const videoPlayerRef = ref(null)
 
-const testVideoSrc = '/test-video.mp4'
+const CLOUD_SERVER_URL = 'http://172.20.10.4:5000'
+const liveVideoSrc = 'http://172.20.10.4:8888/live/mobile_001/index.m3u8'
 
 const latestPlateResult = ref(null)
 const plateRecords = ref([])
@@ -33,83 +34,9 @@ const trafficDensityData = ref([
   { region_id: 'road_D', vehicle_count: 3, status: 'slow', color: 'yellow' }
 ])
 
-const illegalParkingRecords = ref([
-  {
-    event_type: 'illegal_parking',
-    timestamp: new Date(Date.now() - 30000).toISOString(),
-    device_id: 'mobile_001',
-    status: 'warning',
-    data: {
-      track_id: 'track_001',
-      stay_time: 45,
-      threshold: 30
-    },
-    bbox: [200, 150, 220, 170]
-  },
-  {
-    event_type: 'illegal_parking',
-    timestamp: new Date(Date.now() - 60000).toISOString(),
-    device_id: 'mobile_001',
-    status: 'normal',
-    data: {
-      track_id: 'track_002',
-      stay_time: 25,
-      threshold: 30
-    },
-    bbox: [300, 200, 320, 220]
-  },
-  {
-    event_type: 'illegal_parking',
-    timestamp: new Date(Date.now() - 90000).toISOString(),
-    device_id: 'mobile_001',
-    status: 'warning',
-    data: {
-      track_id: 'track_003',
-      stay_time: 55,
-      threshold: 30
-    },
-    bbox: [150, 180, 170, 200]
-  }
-])
+const illegalParkingRecords = ref([])
 
-const roadAnomalyRecords = ref([
-  {
-    event_type: 'road_anomaly',
-    timestamp: new Date(Date.now() - 20000).toISOString(),
-    device_id: 'mobile_001',
-    status: 'warning',
-    data: {
-      anomaly_type: 'fallen_object',
-      affected_lane: 'lane_1',
-      duration_frames: 25
-    },
-    bbox: [300, 200, 320, 220]
-  },
-  {
-    event_type: 'road_anomaly',
-    timestamp: new Date(Date.now() - 50000).toISOString(),
-    device_id: 'mobile_001',
-    status: 'warning',
-    data: {
-      anomaly_type: 'debris',
-      affected_lane: 'lane_2',
-      duration_frames: 18
-    },
-    bbox: [400, 150, 420, 170]
-  },
-  {
-    event_type: 'road_anomaly',
-    timestamp: new Date(Date.now() - 80000).toISOString(),
-    device_id: 'mobile_001',
-    status: 'normal',
-    data: {
-      anomaly_type: 'unknown_object',
-      affected_lane: 'lane_3',
-      duration_frames: 35
-    },
-    bbox: [250, 180, 270, 200]
-  }
-])
+const roadAnomalyRecords = ref([])
 
 const systemStatus = ref({})
 
@@ -143,42 +70,6 @@ const deviceList = ref([
     last_heartbeat: new Date(Date.now() - 60000).toISOString()
   }
 ])
-
-const mockPlateData = [
-  {
-    event_type: 'plate_recognition',
-    timestamp: new Date(Date.now() - 30000).toISOString(),
-    device_id: 'mobile_001',
-    status: 'normal',
-    data: {
-      plate_number: '京A12345',
-      is_in_whitelist: true,
-      decision: 'allow'
-    }
-  },
-  {
-    event_type: 'plate_recognition',
-    timestamp: new Date(Date.now() - 60000).toISOString(),
-    device_id: 'mobile_001',
-    status: 'warning',
-    data: {
-      plate_number: '京B67890',
-      is_in_whitelist: false,
-      decision: 'deny'
-    }
-  },
-  {
-    event_type: 'plate_recognition',
-    timestamp: new Date(Date.now() - 90000).toISOString(),
-    device_id: 'mobile_001',
-    status: 'normal',
-    data: {
-      plate_number: '沪C11223',
-      is_in_whitelist: true,
-      decision: 'allow'
-    }
-  }
-]
 
 const statusMap = {
   disconnected: '未连接',
@@ -305,23 +196,7 @@ onMounted(() => {
     }
   })
 
-  websocketManager.connect('ws://192.168.1.100:5000')
-
-  plateRecords.value = [...mockPlateData]
-  if (mockPlateData.length > 0) {
-    latestPlateResult.value = mockPlateData[0]
-  }
-
-  setTimeout(() => {
-    if (videoPlayerRef.value) {
-      const testBoxes = [
-        { x1: 100, y1: 80, x2: 250, y2: 180, label: '车辆', color: '#ff0000' },
-        { x1: 300, y1: 120, x2: 450, y2: 220, label: '行人', color: '#00ff00' },
-        { x1: 500, y1: 60, x2: 650, y2: 160, label: '自行车', color: '#0000ff' }
-      ]
-      videoPlayerRef.value.drawBoxes(testBoxes)
-    }
-  }, 2000)
+  websocketManager.connect(CLOUD_SERVER_URL)
 })
 
 onUnmounted(() => {
@@ -362,7 +237,7 @@ onUnmounted(() => {
       <div class="content-grid">
         <div class="video-section">
           <h2>视频监控</h2>
-          <VideoPlayer ref="videoPlayerRef" :video-src="testVideoSrc" />
+          <VideoPlayer ref="videoPlayerRef" :video-src="liveVideoSrc" />
         </div>
 
         <div class="plate-section">
