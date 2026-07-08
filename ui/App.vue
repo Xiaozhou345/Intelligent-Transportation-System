@@ -7,6 +7,7 @@ import PlateResult from './components/PlateResult.vue'
 import TrafficHeatmap from './components/TrafficHeatmap.vue'
 import IllegalParkingAlarm from './components/IllegalParkingAlarm.vue'
 import RoadAnomalyAlarm from './components/RoadAnomalyAlarm.vue'
+import VehicleDetectionPanel from './components/VehicleDetectionPanel.vue'
 import SystemMonitor from './components/SystemMonitor.vue'
 import DeviceManager from './components/DeviceManager.vue'
 import ConfigPanel from './components/ConfigPanel.vue'
@@ -23,6 +24,7 @@ const testVideoSrc = '/test-video.mp4'
 
 const latestPlateResult = ref(null)
 const plateRecords = ref([])
+const vehicleDetectionRecords = ref([])
 
 const trafficDensityData = ref([
   { region_id: 'road_A', vehicle_count: 2, status: 'smooth', color: 'green' },
@@ -203,6 +205,31 @@ const handlePlateRecognition = (data) => {
   dashboardStats.plateCount++
 }
 
+const buildVehicleBoxes = (records) => {
+  return records
+    .filter(record => Array.isArray(record.bbox) && record.bbox.length === 4)
+    .slice(0, 10)
+    .map((record, index) => ({
+      x1: record.bbox[0],
+      y1: record.bbox[1],
+      x2: record.bbox[2],
+      y2: record.bbox[3],
+      label: `${record.data?.vehicle_type || 'vehicle'} ${Math.round((record.data?.confidence || 0) * 100)}%`,
+      color: index === 0 ? '#ff4d4f' : '#faad14'
+    }))
+}
+
+const handleVehicleDetection = (data) => {
+  vehicleDetectionRecords.value.unshift(data)
+  if (vehicleDetectionRecords.value.length > 20) {
+    vehicleDetectionRecords.value = vehicleDetectionRecords.value.slice(0, 20)
+  }
+
+  if (videoPlayerRef.value) {
+    videoPlayerRef.value.drawBoxes(buildVehicleBoxes(vehicleDetectionRecords.value))
+  }
+}
+
 const handleTrafficDensity = (data) => {
   if (data.data?.regions) {
     trafficDensityData.value = data.data.regions
@@ -251,7 +278,9 @@ const handleSendCommand = (command) => {
 onMounted(() => {
   websocketManager.onMessage((data) => {
     console.log('WebSocket 消息:', data)
-    if (data.event_type === 'plate_recognition') {
+    if (data.event_type === 'vehicle_detection') {
+      handleVehicleDetection(data)
+    } else if (data.event_type === 'plate_recognition') {
       handlePlateRecognition(data)
     } else if (data.event_type === 'traffic_density') {
       handleTrafficDensity(data)
@@ -276,7 +305,7 @@ onMounted(() => {
     }
   })
 
-  websocketManager.connect('ws://192.168.1.100:5000/ws/results')
+  websocketManager.connect('ws://192.168.1.100:5000')
 
   plateRecords.value = [...mockPlateData]
   if (mockPlateData.length > 0) {
@@ -338,6 +367,7 @@ onUnmounted(() => {
 
         <div class="plate-section">
           <SystemMonitor :system-data="systemStatus" />
+          <VehicleDetectionPanel :records="vehicleDetectionRecords" />
           <PlateResult :latest-result="latestPlateResult" :records="plateRecords" />
           <IllegalParkingAlarm :records="illegalParkingRecords" />
           <RoadAnomalyAlarm :records="roadAnomalyRecords" />

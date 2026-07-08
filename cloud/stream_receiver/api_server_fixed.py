@@ -3,6 +3,7 @@
 """
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from flask_socketio import SocketIO, emit
 from device_manager import DeviceManager
 from vehicle_detection_processor import VehicleDetectionProcessor
 import os
@@ -10,7 +11,11 @@ import os
 
 # 创建Flask应用
 app = Flask(__name__)
-CORS(app)
+app.config['SECRET_KEY'] = 'intelligent-transportation-system-2026'
+CORS(app, resources={r"/*": {"origins": "*"}})
+
+# 创建SocketIO实例
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 # 创建设备管理器和车辆检测处理器
 device_manager = DeviceManager()
@@ -22,7 +27,7 @@ def init_processor():
     global vehicle_processor
     if vehicle_processor is None:
         try:
-            vehicle_processor = VehicleDetectionProcessor(device_manager)
+            vehicle_processor = VehicleDetectionProcessor(device_manager, socketio=socketio)
         except Exception as e:
             print(f"警告: AI模型初始化失败: {str(e)}")
             print("服务将以基础模式运行（无AI识别功能）")
@@ -251,6 +256,21 @@ def health_check():
     }), 200
 
 
+# ==================== WebSocket 事件处理 ====================
+
+@socketio.on('connect')
+def handle_connect():
+    """前端连接事件"""
+    print("前端客户端已连接")
+    emit('connection_status', {'status': 'connected', 'message': '已连接到云端车辆检测服务器'})
+
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    """前端断开连接事件"""
+    print("前端客户端已断开")
+
+
 if __name__ == '__main__':
     print("=" * 60)
     print("云端智慧交通AI分析服务器")
@@ -271,9 +291,12 @@ if __name__ == '__main__':
     print("  GET    /api/device/<id>         - 获取单个设备")
     print("  GET    /api/detection_results   - 获取车辆检测结果")
     print("  GET    /api/health              - 健康检查")
+    print("\n✅ WebSocket 服务: ws://0.0.0.0:5000/socket.io/")
+    print("   - 事件: analysis_result       - 车辆检测实时推送")
+    print("   - 事件: connection_status     - 连接状态")
     print("\n服务地址：http://0.0.0.0:5000")
     print("=" * 60)
     print("\n🚀 服务器启动中...\n")
 
-    # 启动Flask服务
-    app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
+    # 启动 Flask-SocketIO 服务
+    socketio.run(app, host='0.0.0.0', port=5000, debug=False, allow_unsafe_werkzeug=True)

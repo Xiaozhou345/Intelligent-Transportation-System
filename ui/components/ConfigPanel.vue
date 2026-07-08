@@ -20,6 +20,7 @@ const whitelistForm = reactive({
 })
 
 const sceneOptions = [
+  { label: '车辆检测', value: 'vehicle_detection' },
   { label: '车牌识别', value: 'plate_recognition' },
   { label: '车辆密度', value: 'traffic_density' },
   { label: '违停检测', value: 'illegal_parking' },
