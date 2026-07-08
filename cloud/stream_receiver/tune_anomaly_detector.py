@@ -1,9 +1,8 @@
 """
 Offline tuning helper for the road anomaly detector.
 
-It uses clean road photos to warm up MOG2, then checks test photos for foreground
-objects that would become road anomaly candidates. It can run before the sandbox
-vehicle YOLO model is ready.
+It uses clean road photos to initialize the MOG2 background model, then checks
+test photos for persistent non-vehicle foreground objects on the road area.
 """
 import argparse
 import os
@@ -19,13 +18,14 @@ if str(AI_MODELS_DIR) not in sys.path:
     sys.path.append(str(AI_MODELS_DIR))
 
 from anomaly_detection.anomaly_detector import AnomalyDetector
+from anomaly_detection.drivable_segmenter import DrivableAreaSegmenter
 
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Tune MOG2 road anomaly detector with photos.")
+    parser = argparse.ArgumentParser(description="Tune road anomaly detector with photos.")
     parser.add_argument("--clean", default="data/sandbox_anomaly/clean_road", help="Clean road image folder.")
     parser.add_argument("--test", default="data/sandbox_anomaly/vehicle_test", help="Test image folder.")
     parser.add_argument("--output", default="data/sandbox_anomaly/output", help="Debug output folder.")
@@ -35,6 +35,8 @@ def parse_args():
     parser.add_argument("--history", type=int, default=200, help="MOG2 history length.")
     parser.add_argument("--resize-width", type=int, default=960, help="Resize images for stable comparison; 0 disables.")
     parser.add_argument("--learning-rate", type=float, default=0, help="Detection-time MOG2 learning rate.")
+    parser.add_argument("--drivable-model", default="", help="Optional YOLO-seg drivable-area model path.")
+    parser.add_argument("--drivable-conf", type=float, default=0.15, help="Drivable segmentation confidence.")
     parser.add_argument("--no-save", action="store_true", help="Do not write annotated output images.")
     return parser.parse_args()
 
@@ -88,6 +90,11 @@ def main():
         warmup_frames=0,
         learning_rate=args.learning_rate,
     )
+    segmenter = (
+        DrivableAreaSegmenter(args.drivable_model, confidence=args.drivable_conf)
+        if args.drivable_model
+        else None
+    )
 
     print("=" * 70)
     print("Road anomaly detector tuning")
@@ -97,8 +104,10 @@ def main():
     print(f"min_area={args.min_area}, var_threshold={args.var_threshold}, static_frames={args.static_frames}")
 
     for image_path in clean_images:
-        detector.update_background(read_image(image_path, args.resize_width))
-    print("background initialized")
+        clean_image = read_image(image_path, args.resize_width)
+        road_mask = segmenter.predict_mask(clean_image) if segmenter else None
+        detector.update_background(clean_image, road_mask=road_mask)
+    print("MOG2 background initialized")
 
     output_dir = Path(args.output)
     if not args.no_save:
@@ -110,7 +119,8 @@ def main():
 
     for image_path in test_images:
         image = read_image(image_path, args.resize_width)
-        anomalies = detector.detect(image, vehicle_bboxes=[])
+        road_mask = segmenter.predict_mask(image) if segmenter else None
+        anomalies = detector.detect(image, vehicle_bboxes=[], road_mask=road_mask)
         candidate_count = len(anomalies)
         total_candidates += candidate_count
         if candidate_count:

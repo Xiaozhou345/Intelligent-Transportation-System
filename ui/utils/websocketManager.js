@@ -3,7 +3,8 @@
 // true  = 使用模拟数据（后端未启动时使用）
 // false = 连接真实后端 WebSocket
 // ============================================================
-const SIMULATION_MODE = true
+const envSimulationMode = import.meta.env.VITE_SIMULATION_MODE
+const SIMULATION_MODE = envSimulationMode === undefined ? true : envSimulationMode !== 'false'
 
 // ============================================================
 // 模拟数据生成器

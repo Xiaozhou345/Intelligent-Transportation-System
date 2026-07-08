@@ -20,6 +20,7 @@ const errorMessage = ref('')
 const videoPlayerRef = ref(null)
 
 const testVideoSrc = '/test-video.mp4'
+const websocketUrl = import.meta.env.VITE_WS_URL || 'ws://192.168.1.100:5000/ws/results'
 
 const latestPlateResult = ref(null)
 const plateRecords = ref([])
@@ -276,7 +277,7 @@ onMounted(() => {
     }
   })
 
-  websocketManager.connect('ws://192.168.1.100:5000/ws/results')
+  websocketManager.connect(websocketUrl)
 
   plateRecords.value = [...mockPlateData]
   if (mockPlateData.length > 0) {

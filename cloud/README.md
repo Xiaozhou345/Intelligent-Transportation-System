@@ -10,7 +10,7 @@ cloud/
 │   ├── vehicle_detection/  # 车辆检测 (YOLOv11)
 │   ├── plate_recognition/  # 车牌识别 (LPRNet)
 │   ├── vehicle_tracking/   # 车辆跟踪 (ByteTrack)
-│   └── anomaly_detection/  # 异常检测 (MOG2)
+│   └── anomaly_detection/  # 异常检测 (MOG2+车辆掩膜+道路约束+时序判定)
 ├── stream_receiver/        # 视频流接收
 ├── business_logic/         # 业务逻辑
 └── api/                    # API接口
@@ -37,8 +37,14 @@ pip install -r requirements.txt
 - 下载: https://github.com/sirius-ai/LPRNet_Pytorch
 - 位置: `cloud/ai_models/plate_recognition/Final_LPRNet_model.pth`
 
-### 3. ByteTrack & MOG2
-- 无需额外权重文件
+### 3. ByteTrack
+- ByteTrack 无需额外权重文件
+
+### 4. 沙盘道路分割模型（可选道路约束）
+- 文件名: `sandbox_drivable_best.pt`
+- 训练数据: `data/sandbox_drivable`
+- 训练脚本: `cloud/ai_models/anomaly_detection/train_drivable_segmenter.py`
+- 位置: `cloud/ai_models/anomaly_detection/sandbox_drivable_best.pt`
 
 ## 快速测试
 
@@ -66,6 +72,11 @@ cd cloud/ai_models/anomaly_detection
 python3 anomaly_detector.py
 ```
 
+### 训练沙盘道路分割模型
+```powershell
+python cloud\ai_models\anomaly_detection\train_drivable_segmenter.py --data data\sandbox_drivable\data.yaml --model yolo11n-seg.pt --epochs 80 --imgsz 640 --batch 4
+```
+
 ### 测试云端异常检测处理器
 ```bash
 cd ..
@@ -76,7 +87,9 @@ python cloud/stream_receiver/test_anomaly_processor.py
 ```python
 from cloud.stream_receiver.anomaly_processor import RoadAnomalyProcessor
 
-anomaly_processor = RoadAnomalyProcessor()
+anomaly_processor = RoadAnomalyProcessor(
+    drivable_model_path="cloud/ai_models/anomaly_detection/sandbox_drivable_best.pt"
+)
 events = anomaly_processor.process_frame(
     device_id="mobile_001",
     frame=frame,
@@ -84,7 +97,7 @@ events = anomaly_processor.process_frame(
 )
 ```
 
-`vehicle_bboxes` 来自车辆检测模型，用于把正常车辆区域从 MOG2 前景图中排除，避免影响车牌识别或其他模型的独立逻辑。
+`vehicle_bboxes` 来自车辆检测模型，用于把正常车辆区域从异常候选区域中排除，避免影响车牌识别或其他模型的独立逻辑。
 
 ## 四大业务场景
 
@@ -104,7 +117,7 @@ events = anomaly_processor.process_frame(
 - 输出: 车辆轨迹、停留时长、违停告警
 
 ### 4. 道路异常检测
-- 模型: MOG2 + YOLOv11动态掩膜
+- 模型: MOG2背景建模 + YOLO车辆掩膜 + drivable_area道路约束 + 时序异常判定
 - 功能: 检测路面异常物体（掉落物、障碍物）
 - 输出: 异常物体位置、面积、告警状态
 
@@ -113,7 +126,7 @@ events = anomaly_processor.process_frame(
 - [x] YOLOv11车辆检测模块
 - [x] LPRNet车牌识别模块
 - [x] ByteTrack车辆跟踪模块
-- [x] MOG2道路异常检测模块
+- [x] MOG2+车辆掩膜+道路约束+时序异常检测模块
 - [ ] 视频流接收服务
 - [ ] 多模型动态调度
 - [ ] 业务逻辑处理
