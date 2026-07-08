@@ -1,5 +1,6 @@
 <script setup>
-import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import Hls from 'hls.js'
 
 const props = defineProps({
   videoSrc: {
@@ -12,6 +13,49 @@ const videoRef = ref(null)
 const canvasRef = ref(null)
 const containerRef = ref(null)
 const pendingBoxes = ref([])
+let hls = null
+
+const destroyHls = () => {
+  if (hls) {
+    hls.destroy()
+    hls = null
+  }
+}
+
+const loadVideoSource = () => {
+  const video = videoRef.value
+  if (!video) return
+
+  destroyHls()
+
+  if (props.videoSrc.endsWith('.m3u8')) {
+    if (Hls.isSupported()) {
+      hls = new Hls({
+        lowLatencyMode: true,
+        backBufferLength: 30
+      })
+      hls.loadSource(props.videoSrc)
+      hls.attachMedia(video)
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        video.play().catch(() => {})
+      })
+      hls.on(Hls.Events.ERROR, (_, data) => {
+        console.error('HLS 播放错误:', data)
+      })
+      return
+    }
+
+    if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      video.src = props.videoSrc
+      video.load()
+      video.play().catch(() => {})
+      return
+    }
+  }
+
+  video.src = props.videoSrc
+  video.load()
+}
 
 const updateCanvasSize = () => {
   const video = videoRef.value
@@ -109,14 +153,18 @@ const handleResize = () => {
 }
 
 onMounted(() => {
+  loadVideoSource()
   window.addEventListener('resize', handleResize)
 })
 
 onUnmounted(() => {
+  destroyHls()
   window.removeEventListener('resize', handleResize)
 })
 
-watch(() => props.videoSrc, () => {
+watch(() => props.videoSrc, async () => {
+  await nextTick()
+  loadVideoSource()
   updateCanvasSize()
 })
 
@@ -130,7 +178,6 @@ defineExpose({
     <video
       ref="videoRef"
       class="video-element"
-      :src="videoSrc"
       controls
       autoplay
       muted

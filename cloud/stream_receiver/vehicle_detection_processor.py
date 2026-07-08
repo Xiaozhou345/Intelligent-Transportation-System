@@ -24,14 +24,16 @@ from detector import VehicleDetector
 class VehicleDetectionProcessor:
     """车辆检测处理器"""
 
-    def __init__(self, device_manager):
+    def __init__(self, device_manager, socketio=None):
         """
         初始化处理器
 
         Args:
             device_manager: 设备管理器实例
+            socketio: SocketIO实例，用于实时推送检测结果
         """
         self.device_manager = device_manager
+        self.socketio = socketio
         self.active_streams = {}
         self.stop_flags = {}
         self.results_queue = Queue()
@@ -245,6 +247,7 @@ class VehicleDetectionProcessor:
 
                 # 保存结果
                 self.results_queue.put(result)
+                self._emit_result(result)
 
                 # 打印检测信息
                 print(f"   车辆 #{idx + 1}:")
@@ -258,6 +261,16 @@ class VehicleDetectionProcessor:
             print(f"⚠️  车辆检测处理异常: {str(e)}")
             import traceback
             traceback.print_exc()
+
+    def _emit_result(self, result):
+        """实时推送检测结果到前端"""
+        if not self.socketio:
+            return
+
+        try:
+            self.socketio.emit('analysis_result', result)
+        except Exception as e:
+            print(f"⚠️  检测结果实时推送失败: {str(e)}")
 
     def get_latest_results(self, max_count=10):
         """获取最新的识别结果"""

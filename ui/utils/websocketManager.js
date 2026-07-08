@@ -1,10 +1,12 @@
+import { io } from 'socket.io-client'
+
 // ============================================================
 // 🎮 模拟模式开关
 // true  = 使用模拟数据（后端未启动时使用）
 // false = 连接真实后端 WebSocket
 // ============================================================
 const envSimulationMode = import.meta.env.VITE_SIMULATION_MODE
-const SIMULATION_MODE = envSimulationMode === undefined ? true : envSimulationMode !== 'false'
+const SIMULATION_MODE = envSimulationMode === undefined ? false : envSimulationMode !== 'false'
 
 // ============================================================
 // 模拟数据生成器
@@ -133,7 +135,7 @@ class WebSocketManager {
     }
 
     // 真实连接模式
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+    if (this.ws && this.ws.connected) {
       return
     }
 
@@ -148,42 +150,47 @@ class WebSocketManager {
     }
 
     try {
-      this.ws = new WebSocket(this.url)
+      this.ws = io(this.url, {
+        transports: ['websocket'],
+        reconnection: false,
+        timeout: 5000
+      })
       this.status = 'connecting'
       this._notifyStatusChange()
 
-      this.ws.onopen = () => {
+      this.ws.on('connect', () => {
         this.status = 'connected'
         this.reconnectCount = 0
         this._notifyStatusChange()
-        console.log('✅ WebSocket 连接成功')
-      }
+        console.log('✅ Socket.IO 连接成功')
+      })
 
-      this.ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data)
-          if (this.onMessageCallback) {
-            this.onMessageCallback(data)
-          }
-        } catch (e) {
-          console.warn('⚠️ 无法解析 WebSocket 消息:', event.data)
+      this.ws.on('analysis_result', (data) => {
+        if (this.onMessageCallback) {
+          this.onMessageCallback(data)
         }
-      }
+      })
 
-      this.ws.onerror = (error) => {
-        console.error('❌ WebSocket 错误:', error)
+      this.ws.on('connection_status', (data) => {
+        if (this.onMessageCallback) {
+          this.onMessageCallback({ event_type: 'connection_status', data })
+        }
+      })
+
+      this.ws.on('connect_error', (error) => {
+        console.error('❌ Socket.IO 连接错误:', error)
         this.status = 'error'
         this._notifyStatusChange()
         this._handleReconnect()
-      }
+      })
 
-      this.ws.onclose = () => {
-        if (this.status !== 'connected' && this.status !== 'simulating') {
+      this.ws.on('disconnect', () => {
+        if (this.status !== 'simulating') {
           this._handleReconnect()
         }
-      }
+      })
     } catch (error) {
-      console.error('❌ WebSocket 连接异常:', error)
+      console.error('❌ Socket.IO 连接异常:', error)
       this.status = 'error'
       this._notifyStatusChange()
       this._handleReconnect()
@@ -252,8 +259,8 @@ class WebSocketManager {
       return true
     }
 
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(typeof data === 'object' ? JSON.stringify(data) : data)
+    if (this.ws && this.ws.connected) {
+      this.ws.emit('client_command', data)
       return true
     }
     return false
@@ -277,7 +284,7 @@ class WebSocketManager {
       this.reconnectTimer = null
     }
     if (this.ws) {
-      this.ws.close()
+      this.ws.disconnect()
       this.ws = null
     }
     this.status = 'disconnected'

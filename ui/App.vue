@@ -7,6 +7,7 @@ import PlateResult from './components/PlateResult.vue'
 import TrafficHeatmap from './components/TrafficHeatmap.vue'
 import IllegalParkingAlarm from './components/IllegalParkingAlarm.vue'
 import RoadAnomalyAlarm from './components/RoadAnomalyAlarm.vue'
+import VehicleDetectionPanel from './components/VehicleDetectionPanel.vue'
 import SystemMonitor from './components/SystemMonitor.vue'
 import DeviceManager from './components/DeviceManager.vue'
 import ConfigPanel from './components/ConfigPanel.vue'
@@ -19,11 +20,12 @@ const errorMessage = ref('')
 
 const videoPlayerRef = ref(null)
 
-const testVideoSrc = '/test-video.mp4'
-const websocketUrl = import.meta.env.VITE_WS_URL || 'ws://192.168.1.100:5000/ws/results'
+const CLOUD_SERVER_URL = import.meta.env.VITE_CLOUD_SERVER_URL || 'http://172.20.10.2:5000'
+const liveVideoSrc = import.meta.env.VITE_LIVE_VIDEO_URL || 'http://172.20.10.2:8888/live/mobile_001/index.m3u8'
 
 const latestPlateResult = ref(null)
 const plateRecords = ref([])
+const vehicleDetectionRecords = ref([])
 
 const trafficDensityData = ref([
   { region_id: 'road_A', vehicle_count: 2, status: 'smooth', color: 'green' },
@@ -32,83 +34,9 @@ const trafficDensityData = ref([
   { region_id: 'road_D', vehicle_count: 3, status: 'slow', color: 'yellow' }
 ])
 
-const illegalParkingRecords = ref([
-  {
-    event_type: 'illegal_parking',
-    timestamp: new Date(Date.now() - 30000).toISOString(),
-    device_id: 'mobile_001',
-    status: 'warning',
-    data: {
-      track_id: 'track_001',
-      stay_time: 45,
-      threshold: 30
-    },
-    bbox: [200, 150, 220, 170]
-  },
-  {
-    event_type: 'illegal_parking',
-    timestamp: new Date(Date.now() - 60000).toISOString(),
-    device_id: 'mobile_001',
-    status: 'normal',
-    data: {
-      track_id: 'track_002',
-      stay_time: 25,
-      threshold: 30
-    },
-    bbox: [300, 200, 320, 220]
-  },
-  {
-    event_type: 'illegal_parking',
-    timestamp: new Date(Date.now() - 90000).toISOString(),
-    device_id: 'mobile_001',
-    status: 'warning',
-    data: {
-      track_id: 'track_003',
-      stay_time: 55,
-      threshold: 30
-    },
-    bbox: [150, 180, 170, 200]
-  }
-])
+const illegalParkingRecords = ref([])
 
-const roadAnomalyRecords = ref([
-  {
-    event_type: 'road_anomaly',
-    timestamp: new Date(Date.now() - 20000).toISOString(),
-    device_id: 'mobile_001',
-    status: 'warning',
-    data: {
-      anomaly_type: 'fallen_object',
-      affected_lane: 'lane_1',
-      duration_frames: 25
-    },
-    bbox: [300, 200, 320, 220]
-  },
-  {
-    event_type: 'road_anomaly',
-    timestamp: new Date(Date.now() - 50000).toISOString(),
-    device_id: 'mobile_001',
-    status: 'warning',
-    data: {
-      anomaly_type: 'debris',
-      affected_lane: 'lane_2',
-      duration_frames: 18
-    },
-    bbox: [400, 150, 420, 170]
-  },
-  {
-    event_type: 'road_anomaly',
-    timestamp: new Date(Date.now() - 80000).toISOString(),
-    device_id: 'mobile_001',
-    status: 'normal',
-    data: {
-      anomaly_type: 'unknown_object',
-      affected_lane: 'lane_3',
-      duration_frames: 35
-    },
-    bbox: [250, 180, 270, 200]
-  }
-])
+const roadAnomalyRecords = ref([])
 
 const systemStatus = ref({})
 
@@ -143,42 +71,6 @@ const deviceList = ref([
   }
 ])
 
-const mockPlateData = [
-  {
-    event_type: 'plate_recognition',
-    timestamp: new Date(Date.now() - 30000).toISOString(),
-    device_id: 'mobile_001',
-    status: 'normal',
-    data: {
-      plate_number: '京A12345',
-      is_in_whitelist: true,
-      decision: 'allow'
-    }
-  },
-  {
-    event_type: 'plate_recognition',
-    timestamp: new Date(Date.now() - 60000).toISOString(),
-    device_id: 'mobile_001',
-    status: 'warning',
-    data: {
-      plate_number: '京B67890',
-      is_in_whitelist: false,
-      decision: 'deny'
-    }
-  },
-  {
-    event_type: 'plate_recognition',
-    timestamp: new Date(Date.now() - 90000).toISOString(),
-    device_id: 'mobile_001',
-    status: 'normal',
-    data: {
-      plate_number: '沪C11223',
-      is_in_whitelist: true,
-      decision: 'allow'
-    }
-  }
-]
-
 const statusMap = {
   disconnected: '未连接',
   connecting: '连接中',
@@ -202,6 +94,31 @@ const handlePlateRecognition = (data) => {
     plateRecords.value = plateRecords.value.slice(0, 10)
   }
   dashboardStats.plateCount++
+}
+
+const buildVehicleBoxes = (records) => {
+  return records
+    .filter(record => Array.isArray(record.bbox) && record.bbox.length === 4)
+    .slice(0, 10)
+    .map((record, index) => ({
+      x1: record.bbox[0],
+      y1: record.bbox[1],
+      x2: record.bbox[2],
+      y2: record.bbox[3],
+      label: `${record.data?.vehicle_type || 'vehicle'} ${Math.round((record.data?.confidence || 0) * 100)}%`,
+      color: index === 0 ? '#ff4d4f' : '#faad14'
+    }))
+}
+
+const handleVehicleDetection = (data) => {
+  vehicleDetectionRecords.value.unshift(data)
+  if (vehicleDetectionRecords.value.length > 20) {
+    vehicleDetectionRecords.value = vehicleDetectionRecords.value.slice(0, 20)
+  }
+
+  if (videoPlayerRef.value) {
+    videoPlayerRef.value.drawBoxes(buildVehicleBoxes(vehicleDetectionRecords.value))
+  }
 }
 
 const handleTrafficDensity = (data) => {
@@ -252,7 +169,9 @@ const handleSendCommand = (command) => {
 onMounted(() => {
   websocketManager.onMessage((data) => {
     console.log('WebSocket 消息:', data)
-    if (data.event_type === 'plate_recognition') {
+    if (data.event_type === 'vehicle_detection') {
+      handleVehicleDetection(data)
+    } else if (data.event_type === 'plate_recognition') {
       handlePlateRecognition(data)
     } else if (data.event_type === 'traffic_density') {
       handleTrafficDensity(data)
@@ -277,23 +196,7 @@ onMounted(() => {
     }
   })
 
-  websocketManager.connect(websocketUrl)
-
-  plateRecords.value = [...mockPlateData]
-  if (mockPlateData.length > 0) {
-    latestPlateResult.value = mockPlateData[0]
-  }
-
-  setTimeout(() => {
-    if (videoPlayerRef.value) {
-      const testBoxes = [
-        { x1: 100, y1: 80, x2: 250, y2: 180, label: '车辆', color: '#ff0000' },
-        { x1: 300, y1: 120, x2: 450, y2: 220, label: '行人', color: '#00ff00' },
-        { x1: 500, y1: 60, x2: 650, y2: 160, label: '自行车', color: '#0000ff' }
-      ]
-      videoPlayerRef.value.drawBoxes(testBoxes)
-    }
-  }, 2000)
+  websocketManager.connect(CLOUD_SERVER_URL)
 })
 
 onUnmounted(() => {
@@ -334,11 +237,12 @@ onUnmounted(() => {
       <div class="content-grid">
         <div class="video-section">
           <h2>视频监控</h2>
-          <VideoPlayer ref="videoPlayerRef" :video-src="testVideoSrc" />
+          <VideoPlayer ref="videoPlayerRef" :video-src="liveVideoSrc" />
         </div>
 
         <div class="plate-section">
           <SystemMonitor :system-data="systemStatus" />
+          <VehicleDetectionPanel :records="vehicleDetectionRecords" />
           <PlateResult :latest-result="latestPlateResult" :records="plateRecords" />
           <IllegalParkingAlarm :records="illegalParkingRecords" />
           <RoadAnomalyAlarm :records="roadAnomalyRecords" />
