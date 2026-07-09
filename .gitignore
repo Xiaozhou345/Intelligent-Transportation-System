@@ -127,3 +127,10 @@ docker-compose.override.yml
 .coverage
 coverage/
 test-results/
+
+# Local-only dataset staging / manual test artifacts
+cloud/datasets/sandbox_vehicle_new/
+external_datasets/
+plate_test_output/
+plate_crop_*.jpg
+yolo26n.pt
