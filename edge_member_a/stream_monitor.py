@@ -1,10 +1,10 @@
 """
-RTMP stream pull and transport status monitor for Member A.
+Stream pull and transport status monitor for Member A.
 This script verifies the full edge-to-cloud transmission path:
 - cloud HTTP API health
 - registered device status
-- RTMP TCP port reachability
-- real RTMP frame pulling with OpenCV
+- stream TCP port reachability
+- real RTSP/RTMP frame pulling with OpenCV
 """
 from __future__ import annotations
 
@@ -15,8 +15,9 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
 from urllib.request import urlopen
 
 
@@ -43,6 +44,20 @@ def build_stream_url(config: Dict[str, Any]) -> str:
     if not server:
         raise ValueError("Set rtmp_server or stream_url in config.")
     return f"rtmp://{server}:{port}/{app}/{device_id}"
+
+
+def parse_stream_endpoint(stream_url: str, config: Dict[str, Any]) -> Tuple[Optional[str], Optional[int], str]:
+    parsed = urlparse(stream_url)
+    scheme = parsed.scheme or "stream"
+    if parsed.hostname and parsed.port:
+        return parsed.hostname, parsed.port, scheme
+    if parsed.hostname and scheme == "rtsp":
+        return parsed.hostname, 8554, scheme
+    if parsed.hostname and scheme == "rtmp":
+        return parsed.hostname, 1935, scheme
+    if config.get("rtmp_server"):
+        return config.get("rtmp_server"), int(config.get("rtmp_port", 1935)), "rtmp"
+    return None, None, scheme
 
 
 def http_get_json(url: str, timeout: int) -> Dict[str, Any]:
@@ -89,7 +104,7 @@ def pull_frames(stream_url: str, frame_count: int, timeout_seconds: int) -> Dict
     capture = cv2.VideoCapture(stream_url)
     if not capture.isOpened():
         capture.release()
-        return {"ok": False, "error": "cannot open RTMP stream"}
+        return {"ok": False, "error": f"cannot open stream: {stream_url}"}
 
     frames = 0
     width: Optional[int] = None
@@ -136,9 +151,8 @@ def print_result(name: str, result: Dict[str, Any]) -> None:
 def run_once(config: Dict[str, Any], frame_count: int, timeout: int) -> int:
     base_url = normalize_base_url(config["cloud_api_base"])
     device_id = config["device_id"]
-    rtmp_host = config.get("rtmp_server")
-    rtmp_port = int(config.get("rtmp_port", 1935))
     stream_url = build_stream_url(config)
+    stream_host, stream_port, stream_scheme = parse_stream_endpoint(stream_url, config)
 
     print("=" * 60)
     print(f"Monitor time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -148,19 +162,19 @@ def run_once(config: Dict[str, Any], frame_count: int, timeout: int) -> int:
 
     health = http_get_json(f"{base_url}/api/health", timeout)
     device = http_get_json(f"{base_url}/api/device/{device_id}", timeout)
-    tcp = check_tcp(rtmp_host, rtmp_port, timeout) if rtmp_host else {"ok": False, "error": "missing rtmp_server"}
+    tcp = check_tcp(stream_host, stream_port, timeout) if stream_host and stream_port else {"ok": False, "error": "missing stream host"}
     frames = pull_frames(stream_url, frame_count, timeout)
 
     print_result("cloud api health", health)
     print_result("device registration status", device)
-    print_result("rtmp tcp connectivity", tcp)
-    print_result("rtmp frame pulling", frames)
+    print_result(f"{stream_scheme} tcp connectivity", tcp)
+    print_result("stream frame pulling", frames)
 
     return 0 if all(item.get("ok") for item in [health, device, tcp, frames]) else 1
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Monitor RTMP video transmission status")
+    parser = argparse.ArgumentParser(description="Monitor RTSP/RTMP video transmission status")
     parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH), help="Path to edge config JSON")
     parser.add_argument("--frames", type=int, default=30, help="Number of frames to pull")
     parser.add_argument("--timeout", type=int, default=10, help="Timeout in seconds")

@@ -1,10 +1,9 @@
 """
 Fallback HTTP video segment uploader for Member A.
 
-RTMP is the primary transport. This script is reserved for the documented
-degraded mode: upload short video files when real-time streaming is unstable.
-The current cloud code may need Member B to implement /api/video/upload before
-this script can complete successfully.
+SRT/RTMP real-time streaming through cloud MediaMTX is the primary transport.
+This script is reserved for the documented degraded mode: upload short video
+files when real-time streaming is unstable.
 """
 from __future__ import annotations
 

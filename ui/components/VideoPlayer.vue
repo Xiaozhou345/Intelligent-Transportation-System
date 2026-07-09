@@ -37,11 +37,35 @@ const videoRef = ref(null)
 const canvasRef = ref(null)
 const containerRef = ref(null)
 const pendingBoxes = ref([])
+const pendingSourceSize = ref(null)
 const playbackProtocol = ref('初始化')
+const videoViewport = ref({ left: 0, top: 0, width: 0, height: 0 })
 let hls = null
 let peerConnection = null
 let whepResourceUrl = ''
 let webrtcFallbackTimer = null
+
+const calculateVideoViewport = () => {
+  const video = videoRef.value
+  const container = containerRef.value
+  if (!video || !container) {
+    return { left: 0, top: 0, width: 0, height: 0 }
+  }
+
+  const rect = container.getBoundingClientRect()
+  const intrinsicWidth = video.videoWidth || 16
+  const intrinsicHeight = video.videoHeight || 9
+  const scale = Math.min(rect.width / intrinsicWidth, rect.height / intrinsicHeight)
+  const renderedWidth = intrinsicWidth * scale
+  const renderedHeight = intrinsicHeight * scale
+
+  return {
+    left: (rect.width - renderedWidth) / 2,
+    top: (rect.height - renderedHeight) / 2,
+    width: renderedWidth,
+    height: renderedHeight
+  }
+}
 
 const destroyHls = () => {
   if (hls) {
@@ -240,24 +264,44 @@ const updateCanvasSize = () => {
   canvas.style.height = `${rect.height}px`
   canvas.width = rect.width * dpr
   canvas.height = rect.height * dpr
+  videoViewport.value = calculateVideoViewport()
+
+  if (pendingBoxes.value.length > 0) {
+    _drawBoxesInternal(pendingBoxes.value, pendingSourceSize.value)
+  }
 }
 
-const drawBoxes = (boxes) => {
+const clearCanvas = () => {
+  const canvas = canvasRef.value
+  if (!canvas) return
+
+  const ctx = canvas.getContext('2d')
+  ctx.clearRect(0, 0, canvas.width, canvas.height)
+}
+
+const drawBoxes = (boxes, sourceSize = null) => {
   const video = videoRef.value
   const canvas = canvasRef.value
   
   if (!video || !canvas) return
-  if (!boxes || boxes.length === 0) return
-  
-  if (!video.videoWidth || !video.videoHeight) {
-    pendingBoxes.value = boxes
+  if (!boxes || boxes.length === 0) {
+    pendingBoxes.value = []
+    pendingSourceSize.value = null
+    clearCanvas()
     return
   }
   
-  _drawBoxesInternal(boxes)
+  if (!video.videoWidth || !video.videoHeight) {
+    pendingBoxes.value = boxes
+    pendingSourceSize.value = sourceSize
+    return
+  }
+  pendingBoxes.value = boxes
+  pendingSourceSize.value = sourceSize
+  _drawBoxesInternal(boxes, sourceSize)
 }
 
-const _drawBoxesInternal = (boxes) => {
+const _drawBoxesInternal = (boxes, sourceSize = null) => {
   const video = videoRef.value
   const canvas = canvasRef.value
   
@@ -268,25 +312,26 @@ const _drawBoxesInternal = (boxes) => {
   
   ctx.clearRect(0, 0, canvas.width, canvas.height)
   
-  const videoWidth = video.videoWidth || 1
-  const videoHeight = video.videoHeight || 1
-  
-  const rect = canvas.getBoundingClientRect()
-  const scaleX = rect.width * dpr / videoWidth
-  const scaleY = rect.height * dpr / videoHeight
+  const videoWidth = sourceSize?.width || video.videoWidth || 1
+  const videoHeight = sourceSize?.height || video.videoHeight || 1
+  const viewport = calculateVideoViewport()
+  videoViewport.value = viewport
+  const offsetX = viewport.left * dpr
+  const offsetY = viewport.top * dpr
+  const scaleX = viewport.width * dpr / videoWidth
+  const scaleY = viewport.height * dpr / videoHeight
   
   boxes.forEach(box => {
     const { x1, y1, x2, y2, label, color } = box
+    const boxX = offsetX + x1 * scaleX
+    const boxY = offsetY + y1 * scaleY
+    const boxWidth = (x2 - x1) * scaleX
+    const boxHeight = (y2 - y1) * scaleY
     
     ctx.save()
     ctx.strokeStyle = color || '#ff0000'
     ctx.lineWidth = 2 * dpr
-    ctx.strokeRect(
-      x1 * scaleX,
-      y1 * scaleY,
-      (x2 - x1) * scaleX,
-      (y2 - y1) * scaleY
-    )
+    ctx.strokeRect(boxX, boxY, boxWidth, boxHeight)
     
     ctx.fillStyle = color || '#ff0000'
     ctx.font = `${14 * dpr}px sans-serif`
@@ -296,14 +341,14 @@ const _drawBoxesInternal = (boxes) => {
     const labelHeight = 18 * dpr
     
     ctx.fillRect(
-      x1 * scaleX,
-      y1 * scaleY - labelHeight,
-      Math.max(labelWidth + 8 * dpr, (x2 - x1) * scaleX),
+      boxX,
+      Math.max(offsetY, boxY - labelHeight),
+      Math.max(labelWidth + 8 * dpr, boxWidth),
       labelHeight
     )
     
     ctx.fillStyle = '#ffffff'
-    ctx.fillText(label || '', x1 * scaleX + 4 * dpr, y1 * scaleY - labelHeight + 2 * dpr)
+    ctx.fillText(label || '', boxX + 4 * dpr, Math.max(offsetY, boxY - labelHeight) + 2 * dpr)
     
     ctx.restore()
   })
@@ -312,8 +357,7 @@ const _drawBoxesInternal = (boxes) => {
 const handleLoadedMetadata = () => {
   updateCanvasSize()
   if (pendingBoxes.value.length > 0) {
-    _drawBoxesInternal(pendingBoxes.value)
-    pendingBoxes.value = []
+    _drawBoxesInternal(pendingBoxes.value, pendingSourceSize.value)
   }
 }
 
@@ -373,6 +417,12 @@ defineExpose({
       playsinline
       @loadedmetadata="handleLoadedMetadata"
     />
+    <div class="video-frame-guide" aria-hidden="true">
+      <span></span>
+      <span></span>
+      <span></span>
+      <span></span>
+    </div>
     <canvas ref="canvasRef" class="video-canvas" />
   </div>
 </template>
@@ -383,6 +433,7 @@ defineExpose({
   width: 100%;
   max-width: none;
   margin: 0 auto;
+  aspect-ratio: 16 / 9;
   border-radius: 8px;
   overflow: hidden;
   border: 1px solid rgba(34, 211, 238, 0.3);
@@ -391,11 +442,52 @@ defineExpose({
 }
 
 .video-element {
-  position: relative;
+  position: absolute;
+  inset: 0;
   width: 100%;
-  height: auto;
+  height: 100%;
   display: block;
+  object-fit: contain;
   z-index: 1;
+}
+
+.video-frame-guide {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.video-frame-guide span {
+  position: absolute;
+  width: 42px;
+  height: 30px;
+  border-color: rgba(34, 211, 238, 0.7);
+  border-style: solid;
+}
+
+.video-frame-guide span:nth-child(1) {
+  left: 14px;
+  top: 14px;
+  border-width: 2px 0 0 2px;
+}
+
+.video-frame-guide span:nth-child(2) {
+  right: 14px;
+  top: 14px;
+  border-width: 2px 2px 0 0;
+}
+
+.video-frame-guide span:nth-child(3) {
+  right: 14px;
+  bottom: 14px;
+  border-width: 0 2px 2px 0;
+}
+
+.video-frame-guide span:nth-child(4) {
+  left: 14px;
+  bottom: 14px;
+  border-width: 0 0 2px 2px;
 }
 
 .video-canvas {

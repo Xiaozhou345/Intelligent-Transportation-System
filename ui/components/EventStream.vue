@@ -15,9 +15,13 @@ const eventTypeMap = {
   traffic_density: { label: '拥堵分析', type: 'warning' },
   illegal_parking: { label: '违停告警', type: 'danger' },
   road_anomaly: { label: '道路异常', type: 'danger' },
+  video_overlay: { label: '画框快照', type: 'info' },
   system_status: { label: '系统状态', type: 'info' },
   connection_status: { label: '连接状态', type: 'info' },
-  client_command: { label: '控制指令', type: 'info' }
+  client_command: { label: '控制指令', type: 'info' },
+  alarm_disposition: { label: '告警处置', type: 'success' },
+  user_login: { label: '用户登录', type: 'primary' },
+  user_logout: { label: '用户退出', type: 'info' }
 }
 
 const activeFilter = ref('all')
@@ -37,7 +41,7 @@ const filteredEvents = computed(() => {
     return props.events.filter(event => event.event_type === 'vehicle_detection' || event.event_type === 'plate_recognition')
   }
   if (activeFilter.value === 'system') {
-    return props.events.filter(event => event.event_type === 'system_status' || event.event_type === 'connection_status' || event.event_type === 'client_command')
+    return props.events.filter(event => event.event_type === 'system_status' || event.event_type === 'connection_status' || event.event_type === 'client_command' || event.event_type === 'user_login' || event.event_type === 'user_logout' || event.event_type === 'alarm_disposition')
   }
   return props.events
 })
@@ -70,6 +74,12 @@ const getEventSummary = (event) => {
     const total = Array.isArray(data.regions) ? data.regions.reduce((sum, item) => sum + (item.vehicle_count || 0), 0) : 0
     return `区域车辆数合计 ${total}`
   }
+  if (event.event_type === 'video_overlay') {
+    const data = event.data || {}
+    const count = ['vehicles', 'plates', 'illegal_parking', 'road_anomalies']
+      .reduce((sum, key) => sum + (Array.isArray(data[key]) ? data[key].length : 0), 0)
+    return `当前帧叠加目标 ${count} 个`
+  }
   if (event.event_type === 'illegal_parking') {
     return `车辆 ${data.track_id || '-'} 停留 ${Math.round(data.stay_time || 0)} 秒`
   }
@@ -78,6 +88,9 @@ const getEventSummary = (event) => {
   }
   if (event.event_type === 'client_command') {
     return event.command || '已发送控制指令'
+  }
+  if (event.event_type === 'alarm_disposition') {
+    return `${data.operator || '-'} / ${data.note || '已处理'}`
   }
   return event.summary || '收到实时消息'
 }

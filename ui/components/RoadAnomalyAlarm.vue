@@ -1,18 +1,26 @@
 <script setup>
 import { ref, watch } from 'vue'
-import { ElButton, ElDialog, ElTable, ElTableColumn, ElTag, ElNotification } from 'element-plus'
+import { ElButton, ElDialog, ElInput, ElTable, ElTableColumn, ElTag, ElNotification } from 'element-plus'
 
 const props = defineProps({
   records: {
     type: Array,
     default: () => []
+  },
+  canDispose: {
+    type: Boolean,
+    default: true
   }
 })
+
+const emit = defineEmits(['dispose-alarm'])
 
 const displayRecords = ref([])
 const resolvedKeys = ref(new Set())
 const showDetailDialog = ref(false)
+const showDisposeDialog = ref(false)
 const currentAlarm = ref(null)
+const disposeNote = ref('已派人排查，异常解除')
 
 const getAlarmKey = (row) => `${row.timestamp || ''}-${row.data?.anomaly_type || ''}-${row.data?.affected_lane || ''}`
 
@@ -67,9 +75,23 @@ const getDisplayStatus = (row) => {
 }
 
 const handleResolve = (row) => {
+  currentAlarm.value = row
+  disposeNote.value = '已派人排查，异常解除'
+  showDisposeDialog.value = true
+}
+
+const confirmResolve = () => {
+  if (!currentAlarm.value) return
   const next = new Set(resolvedKeys.value)
-  next.add(getAlarmKey(row))
+  next.add(getAlarmKey(currentAlarm.value))
   resolvedKeys.value = next
+  emit('dispose-alarm', {
+    action: 'resolved',
+    eventType: 'road_anomaly',
+    alarm: currentAlarm.value,
+    note: disposeNote.value
+  })
+  showDisposeDialog.value = false
 }
 
 const handleViewDetail = (row) => {
@@ -146,6 +168,7 @@ watch(() => props.records.length, (newLen, oldLen) => {
           <ElButton type="primary" link size="small" @click="handleViewDetail(row)">详情</ElButton>
           <ElButton
             v-if="getDisplayStatus(row) === 'warning'"
+            v-show="canDispose"
             type="success"
             link
             size="small"
@@ -173,11 +196,29 @@ watch(() => props.records.length, (newLen, oldLen) => {
         <ElButton @click="showDetailDialog = false">关闭</ElButton>
         <ElButton
           v-if="currentAlarm && getDisplayStatus(currentAlarm) === 'warning'"
+          v-show="canDispose"
           type="primary"
           @click="handleResolve(currentAlarm); showDetailDialog = false"
         >
           解除告警
         </ElButton>
+      </template>
+    </ElDialog>
+
+    <ElDialog title="解除道路异常告警" v-model="showDisposeDialog" width="420px">
+      <div class="dispose-form">
+        <span>处置备注</span>
+        <ElInput
+          v-model="disposeNote"
+          type="textarea"
+          :rows="3"
+          maxlength="80"
+          show-word-limit
+        />
+      </div>
+      <template #footer>
+        <ElButton @click="showDisposeDialog = false">取消</ElButton>
+        <ElButton type="primary" @click="confirmResolve">确认解除</ElButton>
       </template>
     </ElDialog>
   </div>
@@ -237,5 +278,15 @@ watch(() => props.records.length, (newLen, oldLen) => {
 .alarm-detail strong {
   color: #e0f2fe;
   font-size: 14px;
+}
+
+.dispose-form {
+  display: grid;
+  gap: 8px;
+}
+
+.dispose-form span {
+  color: #93c5fd;
+  font-size: 13px;
 }
 </style>

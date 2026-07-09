@@ -16,9 +16,11 @@ const whipResourceUrl = ref('')
 const status = ref('idle')
 const errorMessage = ref('')
 const facingMode = ref('environment')
-const targetWidth = ref(640)
+const targetWidth = ref(1280)
 const targetFps = ref(15)
 const lowBitrateMode = ref(true)
+
+const targetHeight = computed(() => Math.round(targetWidth.value * 9 / 16))
 
 const isSecureContext = window.isSecureContext
 
@@ -131,7 +133,8 @@ const startCamera = async () => {
       video: {
         facingMode: { ideal: facingMode.value },
         width: { ideal: targetWidth.value },
-        height: { ideal: Math.round(targetWidth.value * 0.75) },
+        height: { ideal: targetHeight.value },
+        aspectRatio: { ideal: 16 / 9 },
         frameRate: { ideal: targetFps.value, max: targetFps.value }
       }
     })
@@ -231,7 +234,7 @@ onUnmounted(() => {
       <div class="publisher-header">
         <div>
           <p>Mobile WebRTC Publisher</p>
-          <h1>手机低延迟采集</h1>
+          <h1>手机横屏采集</h1>
         </div>
         <ElTag :type="statusType" size="large">{{ statusText }}</ElTag>
       </div>
@@ -255,7 +258,11 @@ onUnmounted(() => {
 
       <div class="preview-wrap">
         <video ref="videoRef" autoplay muted playsinline></video>
-        <div v-if="!localStream" class="empty-preview">摄像头预览</div>
+        <div v-if="!localStream" class="empty-preview">
+          <strong>横屏 16:9 预览</strong>
+          <span>请将手机横向固定后再开始推流</span>
+        </div>
+        <div class="landscape-badge">LANDSCAPE 16:9</div>
       </div>
 
       <div class="control-grid">
@@ -268,8 +275,9 @@ onUnmounted(() => {
         </label>
 
         <label>
-          分辨率宽度
+          横屏分辨率
           <ElSlider v-model="targetWidth" :min="480" :max="1280" :step="160" :disabled="status === 'publishing'" />
+          <span class="field-hint">{{ targetWidth }} x {{ targetHeight }}</span>
         </label>
 
         <label>
@@ -337,7 +345,7 @@ onUnmounted(() => {
   position: relative;
   overflow: hidden;
   width: 100%;
-  aspect-ratio: 4 / 3;
+  aspect-ratio: 16 / 9;
   border: 1px solid rgba(125, 211, 252, 0.28);
   background: #020617;
 }
@@ -353,9 +361,35 @@ onUnmounted(() => {
   position: absolute;
   inset: 0;
   display: grid;
+  gap: 6px;
   place-items: center;
+  align-content: center;
   color: #93c5fd;
+  text-align: center;
+}
+
+.empty-preview strong {
+  color: #e0f2fe;
   font-size: 18px;
+}
+
+.empty-preview span {
+  color: #7dd3fc;
+  font-size: 13px;
+}
+
+.landscape-badge {
+  position: absolute;
+  right: 12px;
+  top: 12px;
+  border: 1px solid rgba(125, 211, 252, 0.36);
+  border-radius: 6px;
+  background: rgba(2, 6, 23, 0.72);
+  color: #bae6fd;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0;
+  padding: 6px 8px;
 }
 
 .control-grid {
@@ -369,6 +403,11 @@ onUnmounted(() => {
   gap: 8px;
   color: #cbd5e1;
   font-size: 14px;
+}
+
+.field-hint {
+  color: #7dd3fc;
+  font-size: 12px;
 }
 
 .switch-row {

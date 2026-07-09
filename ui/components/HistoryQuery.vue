@@ -21,7 +21,9 @@ const eventOptions = [
   { label: '车牌识别', value: 'plate_recognition' },
   { label: '拥堵分析', value: 'traffic_density' },
   { label: '违停告警', value: 'illegal_parking' },
-  { label: '道路异常', value: 'road_anomaly' }
+  { label: '道路异常', value: 'road_anomaly' },
+  { label: '画框快照', value: 'video_overlay' },
+  { label: '告警处置', value: 'alarm_disposition' }
 ]
 
 const statusOptions = [
@@ -38,8 +40,12 @@ const eventTypeText = {
   traffic_density: '拥堵分析',
   illegal_parking: '违停告警',
   road_anomaly: '道路异常',
+  video_overlay: '画框快照',
   system_status: '系统状态',
-  client_command: '控制指令'
+  client_command: '控制指令',
+  alarm_disposition: '告警处置',
+  user_login: '用户登录',
+  user_logout: '用户退出'
 }
 
 const filteredEvents = computed(() => {
@@ -58,6 +64,39 @@ const resetFilters = () => {
   filters.eventType = ''
   filters.keyword = ''
   filters.status = ''
+}
+
+const downloadFile = (filename, content, mimeType) => {
+  const blob = new Blob([content], { type: mimeType })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
+const exportJson = () => {
+  downloadFile(
+    `its-events-${Date.now()}.json`,
+    JSON.stringify(filteredEvents.value, null, 2),
+    'application/json;charset=utf-8'
+  )
+}
+
+const exportCsv = () => {
+  const header = ['time', 'type', 'device', 'status', 'detail']
+  const rows = filteredEvents.value.map(event => [
+    formatTime(event.timestamp),
+    eventTypeText[event.event_type] || event.event_type || '',
+    event.device_id || '',
+    event.status || 'normal',
+    formatDetail(event)
+  ])
+  const csv = [header, ...rows]
+    .map(row => row.map(cell => `"${String(cell).replaceAll('"', '""')}"`).join(','))
+    .join('\n')
+  downloadFile(`its-events-${Date.now()}.csv`, csv, 'text/csv;charset=utf-8')
 }
 
 const formatTime = (timestamp) => {
@@ -80,6 +119,10 @@ const formatDetail = (event) => {
   if (event.event_type === 'illegal_parking') return `车辆${data.track_id || '-'} 停留${Math.round(data.stay_time || 0)}秒`
   if (event.event_type === 'road_anomaly') return `${data.anomaly_type || '-'} / ${data.affected_lane || '-'}`
   if (event.event_type === 'traffic_density') return `区域 ${Array.isArray(data.regions) ? data.regions.length : 0} 个`
+  if (event.event_type === 'video_overlay') {
+    return `目标 ${['vehicles', 'plates', 'illegal_parking', 'road_anomalies'].reduce((sum, key) => sum + (Array.isArray(data[key]) ? data[key].length : 0), 0)} 个`
+  }
+  if (event.event_type === 'alarm_disposition') return `${data.operator || '-'} / ${data.note || '已处理'}`
   return event.summary || '-'
 }
 </script>
@@ -88,7 +131,11 @@ const formatDetail = (event) => {
   <section class="history-query">
     <div class="section-header">
       <h2>历史查询</h2>
-      <span>最近 50 条事件</span>
+      <div class="header-actions">
+        <span>最近 50 条事件</span>
+        <ElButton size="small" @click="exportCsv">CSV</ElButton>
+        <ElButton size="small" @click="exportJson">JSON</ElButton>
+      </div>
     </div>
 
     <div class="filters">
@@ -140,6 +187,7 @@ const formatDetail = (event) => {
   display: flex;
   justify-content: space-between;
   margin-bottom: 12px;
+  gap: 12px;
 }
 
 .section-header h2 {
@@ -150,6 +198,12 @@ const formatDetail = (event) => {
 .section-header span {
   color: #93c5fd;
   font-size: 12px;
+}
+
+.header-actions {
+  align-items: center;
+  display: flex;
+  gap: 8px;
 }
 
 .filters {

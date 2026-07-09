@@ -11,7 +11,7 @@ echo   - illegal_parking
 echo   - road_anomaly
 echo.
 
-cd /d E:\Intelligent-Transportation-System\cloud\stream_receiver
+cd /d "%~dp0stream_receiver"
 python main_server.py
 
 pause

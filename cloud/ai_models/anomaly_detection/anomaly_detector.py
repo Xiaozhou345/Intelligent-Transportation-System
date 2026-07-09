@@ -19,6 +19,8 @@ class AnomalyDetector:
         var_threshold=24,
         detect_shadows=False,
         min_area=500,
+        max_area=None,
+        max_area_ratio=0.08,
         static_frames_threshold=15,
         match_distance=50,
         max_missed_frames=3,
@@ -41,6 +43,8 @@ class AnomalyDetector:
             var_threshold: MOG2 variance threshold; higher is less sensitive.
             detect_shadows: Whether MOG2 keeps shadow labels.
             min_area: Minimum connected component area to keep.
+            max_area: Maximum connected component area to keep; None uses ratio.
+            max_area_ratio: Max component area as a fraction of frame area.
             static_frames_threshold: Frames required before warning.
             match_distance: Cross-frame center matching distance.
             max_missed_frames: Frames a tracked anomaly can disappear before reset.
@@ -63,6 +67,8 @@ class AnomalyDetector:
         self.var_threshold = var_threshold
         self.detect_shadows = detect_shadows
         self.min_area = min_area
+        self.max_area = max_area
+        self.max_area_ratio = max_area_ratio
         self.static_frames_threshold = static_frames_threshold
         self.match_distance = match_distance
         self.max_missed_frames = max_missed_frames
@@ -92,11 +98,15 @@ class AnomalyDetector:
             detectShadows=self.detect_shadows,
         )
 
-    def update_background(self, frame=None, road_mask=None):
+    def update_background(self, frame=None, road_mask=None, vehicle_bboxes=None):
         """Feed a clean static-camera frame into the MOG2 background model."""
         if frame is None or frame.size == 0:
             return
         frame = self._apply_road_mask_to_frame(frame, road_mask)
+        if vehicle_bboxes:
+            vehicle_mask = self._build_vehicle_mask(vehicle_bboxes, frame.shape)
+            frame = frame.copy()
+            frame[vehicle_mask > 0] = 0
         self.bg_subtractor.apply(frame, learningRate=1)
         self.background_frames += 1
 
@@ -310,6 +320,8 @@ class AnomalyDetector:
             area = cv2.contourArea(contour)
             if area < self.min_area:
                 continue
+            if area > self._max_component_area(mask.shape):
+                continue
 
             x, y, w, h = cv2.boundingRect(contour)
             bbox = [x, y, x + w, y + h]
@@ -331,6 +343,11 @@ class AnomalyDetector:
                 if anomaly_info["missed_frames"] > self.max_missed_frames:
                     del self.tracked_anomalies[anomaly_id]
         return []
+
+    def _max_component_area(self, shape):
+        if self.max_area is not None:
+            return self.max_area
+        return max(self.min_area, int(shape[0] * shape[1] * self.max_area_ratio))
 
     def _match_or_create_anomaly(self, center, bbox, area, matched_ids=None):
         if matched_ids is None:

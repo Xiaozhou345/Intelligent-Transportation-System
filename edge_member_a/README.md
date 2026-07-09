@@ -5,10 +5,10 @@
 ## 职责范围
 
 - 使用平板/手机摄像头采集交通沙盘或道路画面。
-- 通过 RTMP 将实时视频推送到云端。
+- 通过 SRT 将实时视频推送到云端 MediaMTX，RTMP 作为兜底。
 - 向云端上报设备编号、视频流地址、分辨率、帧率、编码格式、场景编号和时间戳。
 - 推流期间定期发送心跳，辅助云端判断设备在线状态。
-- RTMP 不稳定时，保留 HTTP 视频段上传作为备用方案。
+- 实时推流不稳定时，保留 HTTP 视频段上传作为备用方案。
 
 边端不负责车牌识别、车辆检测、违停跟踪或道路异常检测，这些由云端成员B负责。
 
@@ -36,8 +36,10 @@ Copy-Item edge_member_a\config.example.json edge_member_a\config.json
 
 修改 `edge_member_a/config.json`：
 
-- `cloud_api_base`：成员B云端 API 地址，例如 `http://192.168.1.100:5000`
-- `rtmp_server`：成员B RTMP 服务器 IP，例如 `192.168.1.100`
+- `cloud_api_base`：本地 AI 后端经 frp 暴露的 API 地址，例如 `http://106.54.10.11:15000`
+- `stream_url`：本地 AI 要拉取的云端 MediaMTX RTSP 地址，例如 `rtsp://106.54.10.11:8554/live/mobile_001`
+- `srt_push_url`：手机推流 App 使用的 SRT 地址，例如 `srt://106.54.10.11:8890?streamid=publish:live/mobile_001&latency=200`
+- `rtmp_server`：云端 MediaMTX 的公网 IP，用于 RTMP 兜底推流
 - `device_id`：设备编号，例如 `mobile_001`
 - `scene_id`：场景编号，例如 `scene_704_sandbox`
 
@@ -49,15 +51,25 @@ python edge_member_a\edge_client.py --config edge_member_a\config.json print-con
 
 ## 推荐联调流程
 
-1. 成员B启动云端 HTTP API 服务。
-2. 成员B启动 RTMP 接收服务，确认 1935 端口可访问。
-3. 成员A在平板 RTMP 推流软件中填入：
+1. 腾讯云服务器启动 MediaMTX，并确认 SRT/RTMP/RTSP/WHEP/HLS 相关端口已放行。
+2. 本地 AI 电脑启动后端 API，并通过 frp 暴露到公网 `15000`。
+3. 成员A优先在手机/平板 SRT 推流 App 中填入：
+
+   ```text
+   srt://<云端IP>:8890?streamid=publish:live/mobile_001&latency=200
+   ```
+
+   如果 App 只支持 RTMP，则使用兜底地址：
 
    ```text
    rtmp://<云端IP>:1935/live/mobile_001
    ```
 
-4. 成员A注册设备：
+4. 成员A注册设备。注册时的 `stream_url` 应填写本地 AI 要拉取的云端 RTSP 地址：
+
+   ```text
+   rtsp://<云端IP>:8554/live/mobile_001
+   ```
 
    ```powershell
    python edge_member_a\edge_client.py --config edge_member_a\config.json register
@@ -70,10 +82,10 @@ python edge_member_a\edge_client.py --config edge_member_a\config.json print-con
    python edge_member_a\edge_client.py --config edge_member_a\config.json watch
    ```
 
-7. 成员B在云端查看设备状态：
+7. 成员B在本地后端或公网 frp 地址查看设备状态：
 
    ```text
-   GET http://<云端IP>:5000/api/devices
+   GET http://<云端IP>:15000/api/devices
    ```
 
 8. 停止推流后注销设备：
@@ -86,10 +98,10 @@ python edge_member_a\edge_client.py --config edge_member_a\config.json print-con
 
 老师要求验证“拉流”和“视频传输状态监控”时，先确保：
 
-1. 云端 API 已启动；
-2. MediaMTX / RTMP 服务已启动；
-3. 平板 Larix 已开始推流；
-4. `config.json` 中的 `cloud_api_base` 和 `rtmp_server` 指向同一台云端电脑。
+1. 本地 AI 后端 API 已启动，并且 frp 公网转发可访问；
+2. 腾讯云 MediaMTX 已启动；
+3. 手机/平板 SRT 或 RTMP 推流已开始；
+4. `config.json` 中的 `cloud_api_base` 指向 frp 暴露的本地后端 API，`stream_url` 指向云端 MediaMTX 的 RTSP 拉流地址。
 
 单次检查：
 
@@ -107,17 +119,17 @@ python edge_member_a\stream_monitor.py --config edge_member_a\config.json --watc
 
 - 云端 `/api/health` 是否可访问；
 - 当前设备是否已注册；
-- RTMP 端口 `1935` 是否连通；
-- 是否能从 `rtmp://<云端IP>:1935/live/mobile_001` 真正读取视频帧；
+- RTMP 端口 `1935` 是否连通（兜底推流）；
+- 是否能从 `stream_url` 指向的 RTSP/RTMP 地址真正读取视频帧；
 - 读取到的帧数、分辨率和粗略 FPS。
 
 如果输出：
 
 ```text
-[OK] rtmp frame pulling
+[OK] stream frame pulling
 ```
 
-说明云端已经可以拉取并解码平板推送的视频流。
+说明本地 AI 已经可以从云端 MediaMTX 拉取并解码平板推送的视频流。
 
 ## 接口对接
 
@@ -136,7 +148,7 @@ python edge_member_a\stream_monitor.py --config edge_member_a\config.json --watc
 {
   "device_id": "mobile_001",
   "device_type": "huawei_tablet",
-  "stream_url": "rtmp://192.168.1.100:1935/live/mobile_001",
+  "stream_url": "rtsp://106.54.10.11:8554/live/mobile_001",
   "scene_id": "scene_704_sandbox",
   "resolution": "1280x720",
   "fps": 15,
@@ -154,4 +166,4 @@ python edge_member_a\stream_monitor.py --config edge_member_a\config.json --watc
 python edge_member_a\segment_upload.py --config edge_member_a\config.json .\sample.mp4
 ```
 
-注意：当前云端代码暂未实现 `/api/video/upload`，需要成员B补充接口后才能完整联调。
+云端主服务提供 `/api/video/upload` 作为最小备用接收接口，用于保存视频段并返回文件信息；实时分析仍以云端 MediaMTX 的 RTSP 拉流为主。

@@ -110,7 +110,9 @@ class VideoProcessor:
                 print("沙盘道路分割模型未启用，将使用默认道路ROI")
 
             detector = AnomalyDetector(
-                min_area=int(os.getenv("ITS_ANOMALY_MIN_AREA", "120")),
+                min_area=int(os.getenv("ITS_ANOMALY_MIN_AREA", "900")),
+                max_area=int(os.getenv("ITS_ANOMALY_MAX_AREA", "0")) or None,
+                max_area_ratio=float(os.getenv("ITS_ANOMALY_MAX_AREA_RATIO", "0.08")),
                 static_frames_threshold=int(os.getenv("ITS_ANOMALY_STATIC_FRAMES", "3")),
                 max_missed_frames=int(os.getenv("ITS_ANOMALY_MAX_MISSED", "4")),
                 warmup_frames=int(os.getenv("ITS_ANOMALY_WARMUP_FRAMES", "0")),

@@ -7,6 +7,26 @@ const props = defineProps({
   systemData: {
     type: Object,
     default: () => ({})
+  },
+  connectionStatus: {
+    type: String,
+    default: '未连接'
+  },
+  activeDevices: {
+    type: Number,
+    default: 0
+  },
+  activeStreams: {
+    type: Number,
+    default: 0
+  },
+  eventCount: {
+    type: Number,
+    default: 0
+  },
+  alarmCount: {
+    type: Number,
+    default: 0
   }
 })
 
@@ -230,6 +250,25 @@ onUnmounted(() => {
         <span class="value">{{ localData.bitrate }} kbps</span>
       </div>
     </div>
+
+    <div class="service-grid">
+      <div>
+        <span>Socket</span>
+        <strong>{{ connectionStatus }}</strong>
+      </div>
+      <div>
+        <span>活跃设备</span>
+        <strong>{{ activeDevices }}</strong>
+      </div>
+      <div>
+        <span>分析流</span>
+        <strong>{{ activeStreams }}</strong>
+      </div>
+      <div>
+        <span>事件/告警</span>
+        <strong>{{ eventCount }}/{{ alarmCount }}</strong>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -283,5 +322,36 @@ onUnmounted(() => {
   font-size: 14px;
   color: #e0f2fe;
   font-weight: 500;
+}
+
+.service-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 14px;
+}
+
+.service-grid div {
+  background: rgba(14, 165, 233, 0.1);
+  border: 1px solid rgba(56, 189, 248, 0.14);
+  border-radius: 8px;
+  min-width: 0;
+  padding: 10px;
+}
+
+.service-grid span {
+  color: #93c5fd;
+  display: block;
+  font-size: 12px;
+}
+
+.service-grid strong {
+  color: #e0f2fe;
+  display: block;
+  font-size: 14px;
+  margin-top: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

@@ -15,6 +15,14 @@ ultralytics>=8.0.0
 # 工具库
 imutils>=0.5.4
 scipy>=1.7.0
+requests>=2.31.0
+
+# HTTP API / WebSocket 服务
+flask>=2.3.0
+flask-cors>=4.0.0
+flask-socketio>=5.3.0
+python-socketio>=5.10.0
+python-engineio>=4.8.0
 
 # 可选：GPU加速
 # onnxruntime-gpu

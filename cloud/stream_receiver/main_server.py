@@ -7,7 +7,9 @@ from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 from device_manager import DeviceManager
 from video_processor import VideoProcessor
+from datetime import datetime
 import os
+from pathlib import Path
 
 
 # 创建Flask应用
@@ -21,6 +23,7 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 # 创建设备管理器和视频处理器
 device_manager = DeviceManager()
 video_processor = VideoProcessor(device_manager, socketio)
+UPLOAD_DIR = Path(__file__).resolve().parents[2] / "data" / "uploads" / "video_segments"
 
 
 # ==================== HTTP API 接口 ====================
@@ -219,6 +222,75 @@ def health_check():
     }), 200
 
 
+@app.route('/api/video/upload', methods=['POST'])
+def upload_video_segment():
+    """备用视频段上传接口。
+
+    实时演示仍以云端 MediaMTX 的 RTSP 拉流为主；该接口只用于弱网或
+    推流不稳定时保存短视频段，便于后续离线分析或排查。
+    """
+    try:
+        device_id = request.form.get('device_id')
+        if not device_id:
+            return jsonify({
+                "status": "error",
+                "message": "缺少device_id字段"
+            }), 400
+
+        file = request.files.get('video')
+        if not file or not file.filename:
+            return jsonify({
+                "status": "error",
+                "message": "缺少video文件"
+            }), 400
+
+        original_name = Path(file.filename).name
+        extension = Path(original_name).suffix.lower()
+        if extension not in {'.mp4', '.mov', '.avi', '.mkv', '.flv', '.webm'}:
+            return jsonify({
+                "status": "error",
+                "message": f"不支持的视频格式: {extension or 'unknown'}"
+            }), 400
+
+        UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        saved_name = f"{device_id}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}{extension}"
+        saved_path = UPLOAD_DIR / saved_name
+        file.save(saved_path)
+
+        segment_info = {
+            "device_id": device_id,
+            "scene_id": request.form.get('scene_id', 'scene_704_sandbox'),
+            "timestamp": request.form.get('timestamp') or datetime.now().isoformat(),
+            "resolution": request.form.get('resolution', '1280x720'),
+            "fps": request.form.get('fps', '15'),
+            "codec": request.form.get('codec', 'H.264'),
+            "original_filename": original_name,
+            "saved_filename": saved_name,
+            "saved_path": str(saved_path),
+            "size_bytes": saved_path.stat().st_size,
+        }
+
+        socketio.emit('analysis_result', {
+            "event_type": "video_segment_uploaded",
+            "timestamp": datetime.now().isoformat(),
+            "device_id": device_id,
+            "status": "normal",
+            "data": segment_info,
+        })
+
+        return jsonify({
+            "status": "success",
+            "message": "视频段上传成功",
+            "segment": segment_info,
+        }), 200
+
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": f"视频段上传失败: {str(e)}"
+        }), 500
+
+
 # ==================== WebSocket 事件处理 ====================
 
 @socketio.on('connect')
@@ -307,14 +379,17 @@ if __name__ == '__main__':
     print("   - 事件: connection_status - 连接状态")
     print("   - 事件: devices_list     - 设备列表")
     print("\n✅ 视频流处理引擎: 自动启动")
-    print("   - 设备注册后自动开始处理RTMP视频流")
-    print("   - 抽帧策略: 每3帧处理1帧")
+    print("   - 设备注册后自动从 stream_url 拉流处理")
+    print("   - 推荐 stream_url: rtsp://<云端IP>:8554/live/<device_id>")
+    print("   - 抽帧策略: 通过 ITS_FRAME_SKIP 环境变量配置")
     print("   - 实时推送分析结果到前端")
     print("\n📝 提供给边端的信息:")
-    print("   - HTTP API地址: http://<你的IP>:5000")
-    print("   - RTMP推流地址: rtmp://<你的IP>:1935/live/<device_id>")
+    print("   - HTTP API地址: http://<frp公网IP>:15000 或 http://<本机IP>:5000")
+    print("   - SRT推流地址: srt://<云端IP>:8890?streamid=publish:live/<device_id>&latency=200")
+    print("   - RTMP兜底地址: rtmp://<云端IP>:1935/live/<device_id>")
+    print("   - AI拉流地址: rtsp://<云端IP>:8554/live/<device_id>")
     print("   - 推荐参数: 1280x720, 15fps, H.264, 2Mbps")
-    print("\n⚠️  注意: RTMP服务器需要单独启动（使用MediaMTX或nginx-rtmp）")
+    print("\n⚠️  注意: 本地 AI 电脑不启动 MediaMTX；MediaMTX 运行在云端服务器。")
     print("=" * 60 + "\n")
 
     # 启动Flask-SocketIO服务

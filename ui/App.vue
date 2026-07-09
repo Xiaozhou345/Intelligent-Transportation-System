@@ -17,6 +17,9 @@ import CloudEdgeStatus from './components/CloudEdgeStatus.vue'
 import EventStream from './components/EventStream.vue'
 import HistoryQuery from './components/HistoryQuery.vue'
 import WhitelistManager from './components/WhitelistManager.vue'
+import UserSessionPanel from './components/UserSessionPanel.vue'
+import AlarmWorkbench from './components/AlarmWorkbench.vue'
+import DemoChecklist from './components/DemoChecklist.vue'
 
 const connectionStatus = ref('未连接')
 const reconnectCount = ref(0)
@@ -50,6 +53,9 @@ const trafficDensityData = ref([
 const illegalParkingRecords = ref([])
 const roadAnomalyRecords = ref([])
 const systemStatus = ref({})
+const currentUser = ref(null)
+const showLoginDialog = ref(false)
+const alarmDispositionRecords = ref([])
 
 const dashboardStats = reactive({
   plateCount: 0,
@@ -108,16 +114,26 @@ const statusTypeMap = {
   演示模式: 'warning'
 }
 
+const roleTextMap = {
+  admin: '管理员',
+  operator: '值班员',
+  viewer: '访客'
+}
+
 const activeSceneMeta = computed(() => {
   return sceneTabs.find(scene => scene.value === activeScene.value) || sceneTabs[0]
 })
 
 const onlineDeviceCount = computed(() => deviceList.value.filter(device => device.status === 'online').length)
 const activeAlarmCount = computed(() => {
-  const illegalCount = illegalParkingRecords.value.filter(record => record.status === 'warning').length
-  const anomalyCount = roadAnomalyRecords.value.filter(record => record.status === 'warning').length
+  const handledKeys = new Set(alarmDispositionRecords.value.map(record => record.alarmKey))
+  const illegalCount = illegalParkingRecords.value.filter(record => record.status === 'warning' && !handledKeys.has(getAlarmKey(record, 'illegal_parking'))).length
+  const anomalyCount = roadAnomalyRecords.value.filter(record => record.status === 'warning' && !handledKeys.has(getAlarmKey(record, 'road_anomaly'))).length
   return illegalCount + anomalyCount
 })
+
+const canOperate = computed(() => currentUser.value?.role === 'admin' || currentUser.value?.role === 'operator')
+const canConfigure = computed(() => currentUser.value?.role === 'admin')
 
 const latestEventTime = computed(() => {
   const event = eventRecords.value[0]
@@ -176,6 +192,91 @@ const addEventRecord = (event) => {
   }
 }
 
+const getAlarmKey = (alarm, eventType = alarm?.event_type) => {
+  if (eventType === 'illegal_parking') {
+    return `${eventType}-${alarm?.timestamp || ''}-${alarm?.data?.track_id || alarm?.track_id || ''}`
+  }
+  if (eventType === 'road_anomaly') {
+    return `${eventType}-${alarm?.timestamp || ''}-${alarm?.data?.anomaly_type || ''}-${alarm?.data?.affected_lane || ''}`
+  }
+  return `${eventType || 'alarm'}-${alarm?.timestamp || ''}-${JSON.stringify(alarm?.bbox || [])}`
+}
+
+const loadSavedUser = () => {
+  try {
+    const saved = window.localStorage.getItem('its_current_user')
+    currentUser.value = saved ? JSON.parse(saved) : null
+  } catch {
+    currentUser.value = null
+  }
+}
+
+const handleLogin = (user) => {
+  currentUser.value = user
+  window.localStorage.setItem('its_current_user', JSON.stringify(user))
+  showLoginDialog.value = false
+  addEventRecord({
+    event_type: 'user_login',
+    timestamp: new Date().toISOString(),
+    device_id: 'frontend_console',
+    status: 'normal',
+    summary: `${user.username} 以${roleTextMap[user.role] || user.role}身份登录`,
+    data: user
+  })
+}
+
+const handleLogout = () => {
+  const user = currentUser.value
+  currentUser.value = null
+  window.localStorage.removeItem('its_current_user')
+  addEventRecord({
+    event_type: 'user_logout',
+    timestamp: new Date().toISOString(),
+    device_id: 'frontend_console',
+    status: 'normal',
+    summary: `${user?.username || '用户'} 已退出`,
+    data: { username: user?.username }
+  })
+}
+
+const applyAlarmStatus = (payload) => {
+  const alarmKey = getAlarmKey(payload.alarm, payload.eventType)
+  const patchRecord = (record) => getAlarmKey(record, payload.eventType) === alarmKey
+    ? { ...record, status: payload.action, handled_by: currentUser.value?.username || '未登录用户', handled_at: new Date().toISOString(), note: payload.note }
+    : record
+
+  if (payload.eventType === 'illegal_parking') {
+    illegalParkingRecords.value = illegalParkingRecords.value.map(patchRecord)
+  } else if (payload.eventType === 'road_anomaly') {
+    roadAnomalyRecords.value = roadAnomalyRecords.value.map(patchRecord)
+  }
+
+  const disposition = {
+    id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    alarmKey,
+    eventType: payload.eventType,
+    action: payload.action,
+    operator: currentUser.value?.username || '未登录用户',
+    role: currentUser.value?.role || 'guest',
+    handledAt: new Date().toISOString(),
+    note: payload.note || '已处理',
+    alarm: payload.alarm
+  }
+  alarmDispositionRecords.value.unshift(disposition)
+  if (alarmDispositionRecords.value.length > 50) {
+    alarmDispositionRecords.value = alarmDispositionRecords.value.slice(0, 50)
+  }
+
+  addEventRecord({
+    event_type: 'alarm_disposition',
+    timestamp: disposition.handledAt,
+    device_id: 'frontend_console',
+    status: payload.action,
+    summary: `${disposition.operator} 处理 ${payload.eventType}`,
+    data: disposition
+  })
+}
+
 const updateLatency = (timestamp) => {
   const eventTime = timestamp ? new Date(timestamp).getTime() : Date.now()
   latestLatency.value = Number.isNaN(eventTime)
@@ -214,14 +315,41 @@ const buildVehicleBoxes = (records) => {
     }))
 }
 
+const buildOverlayBoxes = (overlay) => {
+  const data = overlay.data || {}
+  const normalize = (items, color, fallbackLabel) => {
+    return (Array.isArray(items) ? items : [])
+      .filter(item => Array.isArray(item.bbox) && item.bbox.length === 4)
+      .map(item => ({
+        x1: item.bbox[0],
+        y1: item.bbox[1],
+        x2: item.bbox[2],
+        y2: item.bbox[3],
+        label: item.label || fallbackLabel,
+        color
+      }))
+  }
+
+  return [
+    ...normalize(data.vehicles, '#38bdf8', 'vehicle'),
+    ...normalize(data.plates, '#22c55e', 'plate'),
+    ...normalize(data.illegal_parking, '#ef4444', 'illegal'),
+    ...normalize(data.road_anomalies, '#a855f7', 'anomaly')
+  ]
+}
+
+const handleVideoOverlay = (data) => {
+  if (!videoPlayerRef.value) return
+  const sourceSize = data.stream_size?.width && data.stream_size?.height
+    ? { width: data.stream_size.width, height: data.stream_size.height }
+    : null
+  videoPlayerRef.value.drawBoxes(buildOverlayBoxes(data), sourceSize)
+}
+
 const handleVehicleDetection = (data) => {
   vehicleDetectionRecords.value.unshift(data)
   if (vehicleDetectionRecords.value.length > 20) {
     vehicleDetectionRecords.value = vehicleDetectionRecords.value.slice(0, 20)
-  }
-
-  if (videoPlayerRef.value) {
-    videoPlayerRef.value.drawBoxes(buildVehicleBoxes(vehicleDetectionRecords.value))
   }
 }
 
@@ -267,6 +395,10 @@ const handleDeviceAdd = (device) => {
 }
 
 const handleSendCommand = (command) => {
+  if (!canOperate.value) {
+    showLoginDialog.value = true
+    return
+  }
   websocketManager.send(command)
   addEventRecord({
     event_type: 'client_command',
@@ -281,7 +413,9 @@ const routeEvent = (data) => {
   updateLatency(data.timestamp)
   addEventRecord(data)
 
-  if (data.event_type === 'vehicle_detection') {
+  if (data.event_type === 'video_overlay') {
+    handleVideoOverlay(data)
+  } else if (data.event_type === 'vehicle_detection') {
     handleVehicleDetection(data)
   } else if (data.event_type === 'plate_recognition') {
     handlePlateRecognition(data)
@@ -298,6 +432,10 @@ const routeEvent = (data) => {
 
 onMounted(() => {
   if (isPublisherMode) return
+  loadSavedUser()
+  if (!currentUser.value) {
+    showLoginDialog.value = true
+  }
 
   clockTimer = setInterval(() => {
     currentTime.value = new Date()
@@ -360,7 +498,14 @@ onUnmounted(() => {
               </span>
             </ElTag>
           </div>
-          <ConfigPanel @send-command="handleSendCommand" />
+          <UserSessionPanel
+            v-model:visible="showLoginDialog"
+            :user="currentUser"
+            @login="handleLogin"
+            @logout="handleLogout"
+          />
+          <ConfigPanel v-if="canConfigure" @send-command="handleSendCommand" />
+          <ElTag v-else type="info" size="large">只读模式</ElTag>
         </div>
       </div>
     </header>
@@ -371,6 +516,14 @@ onUnmounted(() => {
         title="连接错误"
         :description="errorMessage"
         type="error"
+        show-icon
+        :closable="false"
+      />
+      <ElAlert
+        v-if="!currentUser"
+        title="请先登录"
+        description="未登录时可以查看大屏，但不能执行场景切换、配置变更和告警处置。"
+        type="warning"
         show-icon
         :closable="false"
       />
@@ -417,6 +570,11 @@ onUnmounted(() => {
           <strong>{{ dashboardStats.congestionIndex }}</strong>
           <em>0-100 综合评分</em>
         </div>
+        <div class="overview-card">
+          <span>处置记录</span>
+          <strong>{{ alarmDispositionRecords.length }}</strong>
+          <em>{{ currentUser ? roleTextMap[currentUser.role] : '未登录' }}</em>
+        </div>
       </section>
 
       <section class="command-grid">
@@ -431,7 +589,24 @@ onUnmounted(() => {
             :active-scene-label="activeSceneMeta.label"
             :simulation-mode="websocketManager.isSimulating()"
           />
-          <SystemMonitor :system-data="systemStatus" />
+          <DemoChecklist
+            :connection-status="connectionStatus"
+            :stream-status="streamStatusText"
+            :devices="deviceList"
+            :user="currentUser"
+            :server-url="CLOUD_SERVER_URL"
+            :stream-url="liveWebrtcSrc || liveVideoSrc"
+            :event-count="eventRecords.length"
+            :alarm-count="activeAlarmCount"
+          />
+          <SystemMonitor
+            :system-data="systemStatus"
+            :connection-status="connectionStatus"
+            :active-devices="onlineDeviceCount"
+            :active-streams="systemStatus.active_streams || (streamStatusText === '拉流中' ? 1 : 0)"
+            :event-count="eventRecords.length"
+            :alarm-count="activeAlarmCount"
+          />
           <DeviceManager :devices="deviceList" @add-device="handleDeviceAdd" />
         </aside>
 
@@ -466,15 +641,33 @@ onUnmounted(() => {
             :latest-result="latestPlateResult"
             :records="plateRecords"
           />
-          <IllegalParkingAlarm v-else-if="activeScene === 'illegal_parking'" :records="illegalParkingRecords" />
-          <RoadAnomalyAlarm v-else-if="activeScene === 'road_anomaly'" :records="roadAnomalyRecords" />
+          <IllegalParkingAlarm
+            v-else-if="activeScene === 'illegal_parking'"
+            :records="illegalParkingRecords"
+            :can-dispose="canOperate"
+            @dispose-alarm="applyAlarmStatus"
+          />
+          <RoadAnomalyAlarm
+            v-else-if="activeScene === 'road_anomaly'"
+            :records="roadAnomalyRecords"
+            :can-dispose="canOperate"
+            @dispose-alarm="applyAlarmStatus"
+          />
         </section>
 
         <aside class="right-rail">
           <EventStream :events="eventRecords" />
           <PlateResult :latest-result="latestPlateResult" :records="plateRecords" />
-          <IllegalParkingAlarm :records="illegalParkingRecords" />
-          <RoadAnomalyAlarm :records="roadAnomalyRecords" />
+          <IllegalParkingAlarm
+            :records="illegalParkingRecords"
+            :can-dispose="canOperate"
+            @dispose-alarm="applyAlarmStatus"
+          />
+          <RoadAnomalyAlarm
+            :records="roadAnomalyRecords"
+            :can-dispose="canOperate"
+            @dispose-alarm="applyAlarmStatus"
+          />
         </aside>
       </section>
 
@@ -482,7 +675,10 @@ onUnmounted(() => {
 
       <section class="bottom-grid">
         <HistoryQuery :events="eventRecords" />
-        <WhitelistManager @send-command="handleSendCommand" />
+        <div class="bottom-stack">
+          <AlarmWorkbench :records="alarmDispositionRecords" />
+          <WhitelistManager v-if="canConfigure" @send-command="handleSendCommand" />
+        </div>
       </section>
     </main>
   </div>
@@ -647,7 +843,7 @@ onUnmounted(() => {
 .overview-strip {
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   margin-bottom: 16px;
 }
 
@@ -809,6 +1005,8 @@ onUnmounted(() => {
 :deep(.plate-result-container .el-card),
 :deep(.illegal-parking-alarm),
 :deep(.road-anomaly-alarm),
+:deep(.alarm-workbench),
+:deep(.demo-checklist),
 :deep(.vehicle-detection-panel),
 :deep(.traffic-heatmap-container),
 :deep(.dashboard-stats),
@@ -830,6 +1028,8 @@ onUnmounted(() => {
 :deep(.vehicle-detection-panel h3),
 :deep(.illegal-parking-alarm h3),
 :deep(.road-anomaly-alarm h3),
+:deep(.alarm-workbench h2),
+:deep(.demo-checklist h2),
 :deep(.el-card__header) {
   color: #e0f2fe;
 }
@@ -894,13 +1094,18 @@ onUnmounted(() => {
 .bottom-grid {
   display: grid;
   gap: 16px;
-  grid-template-columns: minmax(0, 1.4fr) minmax(360px, 0.6fr);
+  grid-template-columns: minmax(0, 1.25fr) minmax(380px, 0.75fr);
   margin-top: 16px;
+}
+
+.bottom-stack {
+  display: grid;
+  gap: 16px;
 }
 
 @media (max-width: 1480px) {
   .overview-strip {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
   .command-grid {

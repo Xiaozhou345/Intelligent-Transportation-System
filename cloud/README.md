@@ -127,7 +127,11 @@ events = anomaly_processor.process_frame(
 - [x] LPRNet车牌识别模块
 - [x] ByteTrack车辆跟踪模块
 - [x] MOG2+车辆掩膜+道路约束+时序异常检测模块
-- [ ] 视频流接收服务
-- [ ] 多模型动态调度
-- [ ] 业务逻辑处理
-- [ ] API接口服务
+- [x] 视频流接收服务（从云端 MediaMTX 的 RTSP 地址拉流）
+- [x] 场景切换与共享车辆检测调度
+- [x] 拥堵统计、违停跟踪、道路异常业务逻辑
+- [x] Flask HTTP API + Socket.IO 实时推送
+- [x] 独立车牌识别测试链路（主服务 `video_overlay.plates` 字段预留）
+- [x] 基础 smoke test 入口：`python tools/smoke_test.py`
+- [ ] 待车牌模型稳定后，将车牌识别并入统一主服务实时流
+- [ ] pytest/CI 回归套件
