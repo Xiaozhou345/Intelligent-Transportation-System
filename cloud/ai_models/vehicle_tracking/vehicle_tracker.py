@@ -78,11 +78,27 @@ class KalmanFilter:
         projected_cov = np.linalg.multi_dot((
             self._update_mat, covariance, self._update_mat.T))
 
-        chol_factor = np.linalg.cholesky(
-            projected_cov + innovation_cov)
-        kalman_gain = np.linalg.lstsq(
-            chol_factor, np.dot(covariance, self._update_mat.T).T,
-            rcond=None)[0].T
+        update_cov = projected_cov + innovation_cov
+        chol_factor = None
+        for jitter in [0.0, 1e-6, 1e-4, 1e-2]:
+            try:
+                chol_factor = np.linalg.cholesky(
+                    update_cov + np.eye(update_cov.shape[0]) * jitter
+                )
+                break
+            except np.linalg.LinAlgError:
+                continue
+
+        if chol_factor is None:
+            # 回退到更稳定的伪逆解，避免跟踪线程崩溃
+            kalman_gain = np.dot(
+                covariance,
+                np.dot(self._update_mat.T, np.linalg.pinv(update_cov))
+            )
+        else:
+            kalman_gain = np.linalg.lstsq(
+                chol_factor, np.dot(covariance, self._update_mat.T).T,
+                rcond=None)[0].T
         innovation = measurement - projected_mean
 
         new_mean = mean + np.dot(innovation, kalman_gain.T)
@@ -242,13 +258,28 @@ class VehicleTracker:
         """
         self.frame_id += 1
 
+        # 过滤明显无效的检测框，避免数值异常传播到 Kalman 更新
+        valid_detections = []
+        for det in detections:
+            bbox = det.get('bbox')
+            if not bbox or len(bbox) != 4:
+                continue
+            x1, y1, x2, y2 = bbox
+            w = x2 - x1
+            h = y2 - y1
+            if w <= 2 or h <= 2:
+                continue
+            if not np.isfinite([x1, y1, x2, y2]).all():
+                continue
+            valid_detections.append(det)
+
         # 预测所有跟踪目标的位置
         for track in self.tracked_tracks:
             track.predict()
 
         # 分离高低置信度检测
-        high_det = [d for d in detections if d['confidence'] >= self.track_thresh]
-        low_det = [d for d in detections if d['confidence'] < self.track_thresh]
+        high_det = [d for d in valid_detections if d['confidence'] >= self.track_thresh]
+        low_det = [d for d in valid_detections if d['confidence'] < self.track_thresh]
 
         # 匹配高置信度检测与跟踪
         unmatched_tracks, unmatched_dets = self._match(self.tracked_tracks, high_det)

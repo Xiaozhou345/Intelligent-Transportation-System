@@ -158,9 +158,9 @@ class VideoProcessor:
         if state is None:
             state = {
                 "tracker": VehicleTracker(
-                    max_time_lost=int(os.getenv("ITS_TRACKER_MAX_LOST", "30")),
-                    track_thresh=float(os.getenv("ITS_TRACKER_TRACK_THRESH", "0.45")),
-                    match_thresh=float(os.getenv("ITS_TRACKER_MATCH_THRESH", "0.5")),
+                    max_time_lost=int(os.getenv("ITS_TRACKER_MAX_LOST", "45")),
+                    track_thresh=float(os.getenv("ITS_TRACKER_TRACK_THRESH", "0.40")),
+                    match_thresh=float(os.getenv("ITS_TRACKER_MATCH_THRESH", "0.30")),
                 ),
                 "parking_monitor": IllegalParkingMonitor(
                     stationary_pixel_threshold=float(self.runtime_defaults.get("parking_stationary_pixel_threshold", 18)),
@@ -173,7 +173,7 @@ class VideoProcessor:
                 "traffic_thresholds": dict(self.runtime_defaults.get("traffic_thresholds", {"smooth_max": 2, "slow_max": 5})),
                 "density_emit_every_processed_frames": int(self.runtime_defaults.get("density_emit_every_processed_frames", 3)),
                 "processed_frames": 0,
-                "active_scene": self.runtime_defaults.get("active_scene", "vehicle_detection"),
+                "active_scene": self._resolve_scene_for_device(device_id),
             }
             self.runtime_state[device_id] = state
 
@@ -183,6 +183,26 @@ class VideoProcessor:
             state["no_parking_zones"] = self._scale_regions(self.runtime_defaults.get("no_parking_zones", []), frame_shape)
             state["parking_monitor"].zones = state["no_parking_zones"]
         return state
+
+    @staticmethod
+    def _normalize_scene_name(scene_id: Optional[str]) -> str:
+        if not scene_id:
+            return 'vehicle_detection'
+        scene_id = scene_id.lower()
+        if 'illegal' in scene_id or 'parking' in scene_id:
+            return 'illegal_parking'
+        if 'anomaly' in scene_id:
+            return 'road_anomaly'
+        if 'traffic' in scene_id or 'density' in scene_id:
+            return 'traffic_density'
+        if 'plate' in scene_id:
+            return 'plate_recognition'
+        return 'vehicle_detection'
+
+    def _resolve_scene_for_device(self, device_id: str) -> str:
+        device = self.device_manager.get_device(device_id)
+        scene_id = device.scene_id if device else self.runtime_defaults.get('active_scene')
+        return self._normalize_scene_name(scene_id)
 
     @staticmethod
     def _scale_regions(regions, frame_shape):
@@ -238,6 +258,8 @@ class VideoProcessor:
     def _process_stream(self, device_id, stream_url, stop_event):
         cap = None
         frame_count = 0
+        is_local_file = os.path.exists(stream_url)
+        consecutive_read_failures = 0
 
         try:
             open_attempts = 0
@@ -271,10 +293,15 @@ class VideoProcessor:
                 ret, frame = cap.read()
 
                 if not ret:
+                    consecutive_read_failures += 1
+                    if is_local_file and consecutive_read_failures >= 3:
+                        print(f"本地视频已读取结束: {stream_url}")
+                        break
                     print(f"视频流 {device_id} 读取失败")
                     time.sleep(0.1)
                     continue
 
+                consecutive_read_failures = 0
                 frame_count += 1
                 if frame_count % self.frame_skip != 0:
                     continue
@@ -295,6 +322,7 @@ class VideoProcessor:
         timestamp = datetime.now().isoformat()
         state = self._get_or_create_runtime_state(device_id, frame.shape)
         state["processed_frames"] += 1
+        active_scene = state.get("active_scene", "vehicle_detection")
 
         if not self.vehicle_detector:
             if self.enable_mock_fallback and frame_count % 10 == 0:
@@ -325,7 +353,7 @@ class VideoProcessor:
                 f"用于掩膜 {len(vehicle_bboxes)} 个 {vehicle_debug}"
             )
 
-        if self.emit_vehicle_events:
+        if self.emit_vehicle_events or active_scene == 'vehicle_detection':
             for idx, vehicle in enumerate(vehicles):
                 self._send_result({
                     "event_type": "vehicle_detection",
@@ -341,18 +369,19 @@ class VideoProcessor:
                 })
 
         traffic_event = self._build_traffic_density_event(device_id, state, tracked_vehicles, timestamp)
-        if traffic_event is not None:
+        if traffic_event is not None and active_scene == 'traffic_density':
             self._send_result(traffic_event)
 
         parking_events = state["parking_monitor"].update(device_id, tracked_vehicles, timestamp)
-        for event in parking_events:
-            self._send_result(event)
-            print(
-                f"违停告警: track_id={event['data'].get('track_id')} "
-                f"stay_time={event['data'].get('stay_time')}s bbox={event.get('bbox')}"
-            )
+        if active_scene == 'illegal_parking':
+            for event in parking_events:
+                self._send_result(event)
+                print(
+                    f"违停告警: track_id={event['data'].get('track_id')} "
+                    f"stay_time={event['data'].get('stay_time')}s bbox={event.get('bbox')}"
+                )
 
-        if self.anomaly_processor:
+        if self.anomaly_processor and active_scene == 'road_anomaly':
             events = self.anomaly_processor.process_frame(
                 device_id=device_id,
                 frame=frame,

@@ -38,12 +38,19 @@ class IllegalParkingMonitor:
         stationary_pixel_threshold: float = 18,
         release_grace_frames: int = 3,
         min_history: int = 3,
+        alert_dedupe_seconds: float = 12,
+        alert_dedupe_iou: float = 0.5,
+        alert_dedupe_center_distance: float = 80,
     ):
         self.zones = zones or []
         self.stationary_pixel_threshold = stationary_pixel_threshold
         self.release_grace_frames = release_grace_frames
         self.min_history = min_history
+        self.alert_dedupe_seconds = alert_dedupe_seconds
+        self.alert_dedupe_iou = alert_dedupe_iou
+        self.alert_dedupe_center_distance = alert_dedupe_center_distance
         self.track_states: Dict[int, TrackParkingState] = {}
+        self.recent_alerts: List[dict] = []
 
     def update(self, device_id: str, tracked_vehicles: List[dict], timestamp_iso: str) -> List[dict]:
         now = self._parse_iso_time(timestamp_iso)
@@ -81,7 +88,6 @@ class IllegalParkingMonitor:
             zone_id = zone['zone_id']
             zone_name = zone.get('name', zone_id)
             threshold = float(zone.get('threshold_seconds', 30))
-            cooldown = float(zone.get('cooldown_seconds', 10))
 
             if state.current_zone_id != zone_id:
                 state.current_zone_id = zone_id
@@ -90,21 +96,16 @@ class IllegalParkingMonitor:
                 state.has_warned = False
                 state.last_warned_at = None
 
+            self._inherit_recent_alert_state(state, zone_id, bbox, now)
+
             stay_time = (now - state.zone_entered_at).total_seconds() if state.zone_entered_at else 0
             is_stationary = self._is_stationary(state)
 
             if stay_time >= threshold and is_stationary:
-                should_warn = False
                 if not state.has_warned:
-                    should_warn = True
-                elif state.last_warned_at is not None:
-                    elapsed = (now - state.last_warned_at).total_seconds()
-                    should_warn = elapsed >= cooldown
-
-                if should_warn:
                     state.has_warned = True
                     state.last_warned_at = now
-                    events.append({
+                    candidate_event = {
                         'event_type': 'illegal_parking',
                         'timestamp': timestamp_iso,
                         'device_id': device_id,
@@ -121,7 +122,16 @@ class IllegalParkingMonitor:
                             'vehicle_type': tracked.get('class_name', 'vehicle'),
                             'confidence': tracked.get('confidence', 0),
                         },
-                    })
+                    }
+                    if not self._is_duplicate_alert(candidate_event, now):
+                        self.recent_alerts.append({
+                            'timestamp': now,
+                            'zone_id': zone_id,
+                            'bbox': bbox,
+                            'track_id': track_id,
+                        })
+                        self._prune_recent_alerts(now)
+                        events.append(candidate_event)
 
         self._age_unseen_tracks(seen_track_ids)
         return events
@@ -184,6 +194,69 @@ class IllegalParkingMonitor:
                 inside = not inside
             j = i
         return inside
+
+    def _prune_recent_alerts(self, now: datetime):
+        self.recent_alerts = [
+            item for item in self.recent_alerts
+            if (now - item['timestamp']).total_seconds() <= self.alert_dedupe_seconds
+        ]
+
+    def _inherit_recent_alert_state(self, state: TrackParkingState, zone_id: str, bbox: BBox, now: datetime):
+        """如果刚生成了新的 track_id，但其实还是同一辆车，则继承已告警状态。"""
+        self._prune_recent_alerts(now)
+        center = self._bottom_center(bbox)
+        for item in self.recent_alerts:
+            if item['zone_id'] != zone_id:
+                continue
+            existing_center = self._bottom_center(item['bbox'])
+            if (
+                self._bbox_iou(bbox, item['bbox']) >= self.alert_dedupe_iou
+                or self._center_distance(center, existing_center) <= self.alert_dedupe_center_distance
+            ):
+                state.has_warned = True
+                state.last_warned_at = item['timestamp']
+                if state.zone_entered_at is None or state.zone_entered_at > item['timestamp']:
+                    state.zone_entered_at = item['timestamp']
+                return
+
+    def _is_duplicate_alert(self, event: dict, now: datetime) -> bool:
+        self._prune_recent_alerts(now)
+        zone_id = event['data'].get('zone_id')
+        bbox = event['bbox']
+        center = self._bottom_center(bbox)
+
+        for item in self.recent_alerts:
+            if item['zone_id'] != zone_id:
+                continue
+            existing_center = self._bottom_center(item['bbox'])
+            if self._bbox_iou(bbox, item['bbox']) >= self.alert_dedupe_iou:
+                return True
+            if self._center_distance(center, existing_center) <= self.alert_dedupe_center_distance:
+                return True
+        return False
+
+    @staticmethod
+    def _bbox_iou(bbox1: BBox, bbox2: BBox) -> float:
+        x1_min, y1_min, x1_max, y1_max = bbox1
+        x2_min, y2_min, x2_max, y2_max = bbox2
+
+        inter_x_min = max(x1_min, x2_min)
+        inter_y_min = max(y1_min, y2_min)
+        inter_x_max = min(x1_max, x2_max)
+        inter_y_max = min(y1_max, y2_max)
+
+        if inter_x_max <= inter_x_min or inter_y_max <= inter_y_min:
+            return 0.0
+
+        inter_area = (inter_x_max - inter_x_min) * (inter_y_max - inter_y_min)
+        area1 = (x1_max - x1_min) * (y1_max - y1_min)
+        area2 = (x2_max - x2_min) * (y2_max - y2_min)
+        union_area = area1 + area2 - inter_area
+        return inter_area / union_area if union_area > 0 else 0.0
+
+    @staticmethod
+    def _center_distance(p1: Point, p2: Point) -> float:
+        return math.hypot(p1[0] - p2[0], p1[1] - p2[1])
 
     @staticmethod
     def _parse_iso_time(timestamp_iso: str) -> datetime:
