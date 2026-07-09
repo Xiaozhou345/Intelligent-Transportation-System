@@ -381,14 +381,15 @@ class VideoProcessor:
                     f"stay_time={event['data'].get('stay_time')}s bbox={event.get('bbox')}"
                 )
 
+        anomaly_events = []
         if self.anomaly_processor and active_scene == 'road_anomaly':
-            events = self.anomaly_processor.process_frame(
+            anomaly_events = self.anomaly_processor.process_frame(
                 device_id=device_id,
                 frame=frame,
                 vehicle_bboxes=vehicle_bboxes,
                 timestamp=timestamp,
             )
-            for event in events:
+            for event in anomaly_events:
                 self._send_result(event)
                 print(
                     f"道路异常告警: bbox={event.get('bbox')} "
@@ -399,10 +400,21 @@ class VideoProcessor:
             if frame_count % 90 == 0:
                 print(
                     f"帧 {frame_count}: 道路异常检测完成，"
-                    f"车辆掩膜 {len(vehicle_bboxes)} 个，告警 {len(events)} 条"
+                    f"车辆掩膜 {len(vehicle_bboxes)} 个，告警 {len(anomaly_events)} 条"
                 )
-                self._save_debug_frame(frame, frame_count, vehicle_bboxes, events)
+                self._save_debug_frame(frame, frame_count, vehicle_bboxes, anomaly_events)
                 self._save_road_mask_debug(frame, frame_count)
+
+        overlay = self._build_video_overlay(
+            device_id=device_id,
+            timestamp=timestamp,
+            frame=frame,
+            tracked_vehicles=tracked_vehicles,
+            parking_events=parking_events,
+            anomaly_events=anomaly_events,
+            plate_events=[],
+        )
+        self._send_result(overlay)
 
     def _build_traffic_density_event(self, device_id, state, tracked_vehicles, timestamp):
         emit_every = max(1, int(state.get("density_emit_every_processed_frames", 3)))
@@ -501,6 +513,64 @@ class VideoProcessor:
                 inside = not inside
             j = i
         return inside
+
+    def _build_video_overlay(self, device_id, timestamp, frame, tracked_vehicles, parking_events, anomaly_events, plate_events):
+        overlay = {
+            'event_type': 'video_overlay',
+            'timestamp': timestamp,
+            'device_id': device_id,
+            'status': 'normal',
+            'stream_size': {
+                'width': int(frame.shape[1]),
+                'height': int(frame.shape[0]),
+            },
+            'data': {
+                'vehicles': [],
+                'plates': [],
+                'illegal_parking': [],
+                'road_anomalies': [],
+            },
+        }
+
+        for tracked in tracked_vehicles:
+            overlay['data']['vehicles'].append({
+                'track_id': tracked.get('track_id'),
+                'bbox': [int(v) for v in tracked.get('bbox', [])],
+                'label': f"{tracked.get('class_name', 'vehicle')} {tracked.get('confidence', 0):.2f}",
+                'confidence': tracked.get('confidence', 0),
+            })
+
+        for event in plate_events:
+            bbox = [int(v) for v in event.get('bbox', [])]
+            overlay['data']['plates'].append({
+                'bbox': bbox,
+                'label': event.get('data', {}).get('plate_number', 'plate'),
+                'confidence': event.get('data', {}).get('confidence', 0),
+                'track_id': event.get('data', {}).get('track_id'),
+            })
+
+        for event in parking_events:
+            bbox = [int(v) for v in event.get('bbox', [])]
+            overlay['data']['illegal_parking'].append({
+                'bbox': bbox,
+                'track_id': event.get('data', {}).get('track_id'),
+                'stay_time': event.get('data', {}).get('stay_time', 0),
+                'threshold': event.get('data', {}).get('threshold', 0),
+                'status': event.get('status', 'warning'),
+                'label': f"track {event.get('data', {}).get('track_id', '-') } {event.get('data', {}).get('stay_time', 0)}s",
+            })
+
+        for event in anomaly_events:
+            bbox = [int(v) for v in event.get('bbox', [])]
+            overlay['data']['road_anomalies'].append({
+                'bbox': bbox,
+                'label': event.get('data', {}).get('anomaly_type', 'anomaly'),
+                'status': event.get('status', 'warning'),
+                'affected_lane': event.get('data', {}).get('affected_lane'),
+                'duration_frames': event.get('data', {}).get('duration_frames', 0),
+            })
+
+        return overlay
 
     def _save_debug_frame(self, frame, frame_count, vehicle_bboxes, events):
         try:

@@ -23,6 +23,7 @@ class TrackParkingState:
     anchor_history: List[Point] = field(default_factory=list)
     current_zone_id: Optional[str] = None
     current_zone_name: Optional[str] = None
+    current_threshold: float = 0.0
     zone_entered_at: Optional[datetime] = None
     has_warned: bool = False
     last_warned_at: Optional[datetime] = None
@@ -92,6 +93,7 @@ class IllegalParkingMonitor:
             if state.current_zone_id != zone_id:
                 state.current_zone_id = zone_id
                 state.current_zone_name = zone_name
+                state.current_threshold = threshold
                 state.zone_entered_at = now
                 state.has_warned = False
                 state.last_warned_at = None
