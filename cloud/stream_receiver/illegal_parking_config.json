@@ -1,0 +1,39 @@
+{
+  "default": {
+    "traffic_regions": [
+      {
+        "region_id": "road_A",
+        "polygon": [[0.02, 0.46], [0.26, 0.46], [0.26, 0.84], [0.02, 0.84]]
+      },
+      {
+        "region_id": "road_B",
+        "polygon": [[0.26, 0.46], [0.50, 0.46], [0.50, 0.84], [0.26, 0.84]]
+      },
+      {
+        "region_id": "road_C",
+        "polygon": [[0.50, 0.46], [0.74, 0.46], [0.74, 0.84], [0.50, 0.84]]
+      },
+      {
+        "region_id": "road_D",
+        "polygon": [[0.74, 0.46], [0.98, 0.46], [0.98, 0.84], [0.74, 0.84]]
+      }
+    ],
+    "traffic_thresholds": {
+      "smooth_max": 2,
+      "slow_max": 5
+    },
+    "no_parking_zones": [
+      {
+        "zone_id": "no_parking_A",
+        "name": "禁停区A",
+        "polygon": [[0.38, 0.46], [0.62, 0.46], [0.62, 0.84], [0.38, 0.84]],
+        "threshold_seconds": 30,
+        "cooldown_seconds": 10
+      }
+    ],
+    "parking_stationary_pixel_threshold": 18,
+    "parking_release_grace_frames": 3,
+    "parking_min_history": 3,
+    "density_emit_every_processed_frames": 3
+  }
+}

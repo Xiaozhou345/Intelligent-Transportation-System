@@ -1,10 +1,10 @@
 """
-云端API服务器 - 沙盘车辆检测优化版
+云端API服务器 - 沙盘车牌识别版
 """
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from device_manager import DeviceManager
-from plate_recognition_processor_v2 import PlateRecognitionProcessor
+from plate_recognition_processor import PlateRecognitionProcessor
 import os
 
 
@@ -18,7 +18,7 @@ vehicle_processor = None
 
 
 def init_processor():
-    """初始化车辆检测处理器"""
+    """初始化车牌识别处理器"""
     global vehicle_processor
     if vehicle_processor is None:
         try:
@@ -63,10 +63,10 @@ def register_device():
         )
 
         if success:
-            # 启动车辆检测处理
+            # 启动车牌识别处理
             if vehicle_processor:
                 vehicle_processor.start_processing(device_id, stream_url)
-                message = "设备注册成功，AI车辆检测已启动（沙盘优化模式）"
+                message = "设备注册成功，AI车牌识别已启动（沙盘模式）"
             else:
                 message = "设备注册成功（AI模型未加载）"
 
@@ -203,10 +203,10 @@ def get_device(device_id):
         }), 500
 
 
-@app.route('/api/detection_results', methods=['GET'])
-def get_detection_results():
+@app.route('/api/plate_results', methods=['GET'])
+def get_plate_results():
     """
-    获取最新的车辆检测结果
+    获取最新的车牌识别结果
 
     Query参数:
         limit: 最多返回的结果数，默认10
@@ -230,7 +230,7 @@ def get_detection_results():
     except Exception as e:
         return jsonify({
             "status": "error",
-            "message": f"获取检测结果失败: {str(e)}"
+            "message": f"获取识别结果失败: {str(e)}"
         }), 500
 
 
@@ -248,7 +248,7 @@ def health_check():
 if __name__ == '__main__':
     print("=" * 60)
     print("云端智慧交通AI分析服务器")
-    print("沙盘车辆检测优化版")
+    print("沙盘车牌识别版")
     print("=" * 60)
     print("\n正在初始化...")
 
@@ -263,7 +263,7 @@ if __name__ == '__main__':
     print("  POST   /api/heartbeat           - 心跳上报")
     print("  GET    /api/devices             - 获取所有设备")
     print("  GET    /api/device/<id>         - 获取单个设备")
-    print("  GET    /api/detection_results   - 获取车辆检测结果")
+    print("  GET    /api/plate_results      - 获取车牌识别结果")
     print("  GET    /api/health              - 健康检查")
     print("\n服务地址：http://0.0.0.0:5000")
     print("=" * 60)

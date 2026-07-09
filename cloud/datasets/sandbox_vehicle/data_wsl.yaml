@@ -1,4 +1,4 @@
-path: /mnt/e/Intelligent-Transportation-System/cloud/datasets/sandbox_vehicle
+path: /root/S/Intelligent-Transportation-System/cloud/datasets/sandbox_vehicle
 train: images/train
 val: images/val
 

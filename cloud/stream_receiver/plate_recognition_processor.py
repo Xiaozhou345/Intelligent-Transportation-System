@@ -1,6 +1,6 @@
 """
 实时车牌识别视频处理引擎
-集成YOLO车辆检测 + LPRNet车牌识别
+集成车牌YOLO检测 + LPRNet车牌识别
 """
 import cv2
 import sys
@@ -9,12 +9,16 @@ import threading
 import time
 from datetime import datetime
 from queue import Queue
-import numpy as np
 
 # 添加AI模型路径
-sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/../ai_models')
+current_dir = os.path.dirname(os.path.abspath(__file__))
+ai_models_dir = os.path.join(current_dir, '..', 'ai_models')
+plate_detection_dir = os.path.join(ai_models_dir, 'plate_detection')
 
-from vehicle_detection.detector import VehicleDetector
+sys.path.insert(0, ai_models_dir)
+sys.path.insert(0, plate_detection_dir)
+
+from plate_detection.detector import PlateDetector
 from plate_recognition.plate_recognizer import PlateRecognizer
 
 
@@ -33,30 +37,52 @@ class PlateRecognitionProcessor:
         self.stop_flags = {}  # {device_id: stop_event}
         self.results_queue = Queue()  # 识别结果队列
 
-        # 初始化AI模型
         print("=" * 60)
-        print("正在初始化AI模型...")
+        print("正在初始化车牌识别AI模型...")
         print("=" * 60)
 
         try:
-            # 获取模型路径
-            base_path = os.path.dirname(os.path.abspath(__file__))
-            yolo_path = os.path.join(base_path, '../ai_models/vehicle_detection/yolo11s.pt')
-            lprnet_path = os.path.join(base_path, '../ai_models/plate_recognition/Final_LPRNet_model.pth')
+            self.plate_model_path = self._resolve_plate_model_path()
+            self.lprnet_path = self._resolve_lprnet_model_path()
 
-            # 加载车辆检测器
-            self.vehicle_detector = VehicleDetector(model_path=yolo_path, conf_threshold=0.5)
+            print(f"车牌检测模型路径: {self.plate_model_path}")
+            print(f"LPRNet模型路径: {self.lprnet_path}")
 
-            # 加载车牌识别器
-            self.plate_recognizer = PlateRecognizer(model_path=lprnet_path)
+            self.plate_detector = PlateDetector(
+                model_path=self.plate_model_path,
+                conf_threshold=0.20
+            )
+            self.plate_recognizer = PlateRecognizer(model_path=self.lprnet_path)
 
             print("=" * 60)
-            print("✅ AI模型加载完成！")
+            print("✅ 车牌识别AI模型加载完成！")
+            print("   配置: 车牌直检模式 (conf=0.20)")
             print("=" * 60)
 
         except Exception as e:
             print(f"❌ AI模型加载失败: {str(e)}")
             raise
+
+    def _resolve_plate_model_path(self):
+        candidates = [
+            os.path.join(ai_models_dir, 'plate_detection', 'sandbox_plate_best.pt'),
+        ]
+        for path in candidates:
+            if os.path.exists(path):
+                return path
+        raise FileNotFoundError("未找到车牌检测模型 sandbox_plate_best.pt")
+
+    def _resolve_lprnet_model_path(self):
+        repo_root = os.path.abspath(os.path.join(current_dir, '..', '..'))
+        candidates = [
+            os.path.join(ai_models_dir, 'plate_recognition', 'Final_LPRNet_model.pth'),
+            os.path.join(repo_root, 'models', 'lprnet_best.pth'),
+            os.path.join(repo_root, 'ui', 'models', 'pretrained_lprnet.pth'),
+        ]
+        for path in candidates:
+            if os.path.exists(path):
+                return path
+        raise FileNotFoundError("未找到可用的LPRNet模型文件")
 
     def start_processing(self, device_id, stream_url):
         """
@@ -67,14 +93,20 @@ class PlateRecognitionProcessor:
             stream_url: RTMP流地址
         """
         if device_id in self.active_streams:
-            print(f"设备 {device_id} 已在处理中")
-            return False
+            thread = self.active_streams[device_id]
+            if thread.is_alive():
+                print(f"设备 {device_id} 已在处理中")
+                return False
 
-        # 创建停止标志
+            print(f"⚠️  设备 {device_id} 的旧处理线程已结束，重新启动处理")
+            self.active_streams.pop(device_id, None)
+            old_stop_event = self.stop_flags.pop(device_id, None)
+            if old_stop_event:
+                old_stop_event.set()
+
         stop_event = threading.Event()
         self.stop_flags[device_id] = stop_event
 
-        # 启动处理线程
         thread = threading.Thread(
             target=self._process_stream,
             args=(device_id, stream_url, stop_event),
@@ -112,36 +144,70 @@ class PlateRecognitionProcessor:
         """
         cap = None
         frame_count = 0
-        process_interval = 15  # 每15帧处理一次（约1秒处理一次，假设15fps）
+        process_interval = 10  # 每10帧处理一次
 
         try:
-            # 打开视频流
             print(f"📡 正在连接视频流: {stream_url}")
-            cap = cv2.VideoCapture(stream_url)
 
-            if not cap.isOpened():
+            open_attempts = 0
+            max_open_attempts = 60
+            while not stop_event.is_set() and open_attempts < max_open_attempts:
+                open_attempts += 1
+                cap = cv2.VideoCapture(stream_url)
+
+                if cap.isOpened():
+                    break
+
+                if cap:
+                    cap.release()
+                    cap = None
+
+                if open_attempts == 1 or open_attempts % 5 == 0:
+                    print(
+                        f"⚠️  视频流尚未可读: {stream_url} "
+                        f"(打开尝试 {open_attempts}/{max_open_attempts})"
+                    )
+                time.sleep(1)
+
+            if not cap or not cap.isOpened():
                 print(f"❌ 无法打开视频流: {stream_url}")
                 return
 
             print(f"✅ 成功连接视频流: {device_id}")
-            print(f"   开始AI分析...")
+            print("   开始车牌检测 + OCR 分析...")
+
+            consecutive_errors = 0
+            max_consecutive_errors = 60
+            last_read_error_log_time = 0
 
             while not stop_event.is_set():
                 ret, frame = cap.read()
 
                 if not ret:
-                    print(f"⚠️  读取视频帧失败: {device_id}")
-                    time.sleep(0.1)
+                    consecutive_errors += 1
+                    now = time.time()
+                    if consecutive_errors == 1 or now - last_read_error_log_time >= 3:
+                        print(
+                            f"⚠️  视频流暂时无帧: {device_id} "
+                            f"(连续失败 {consecutive_errors}/{max_consecutive_errors})"
+                        )
+                        last_read_error_log_time = now
+
+                    if consecutive_errors >= max_consecutive_errors:
+                        print(f"❌ 连续读取失败 {max_consecutive_errors} 次，停止处理")
+                        break
+                    time.sleep(0.5)
                     continue
 
+                if consecutive_errors > 0:
+                    print(f"✅ 视频流恢复: {device_id}")
+                consecutive_errors = 0
                 frame_count += 1
 
-                # 每N帧处理一次
                 if frame_count % process_interval != 0:
                     continue
 
-                # 执行车牌识别
-                self._recognize_plates(device_id, frame)
+                self._recognize_plates(device_id, frame, frame_count)
 
         except Exception as e:
             print(f"❌ 视频流处理异常 {device_id}: {str(e)}")
@@ -149,83 +215,72 @@ class PlateRecognitionProcessor:
         finally:
             if cap:
                 cap.release()
-            print(f"⏹️  视频流处理结束: {device_id}")
+            print(f"⏹️  视频流处理结束: {device_id} (共处理 {frame_count} 帧)")
 
-    def _recognize_plates(self, device_id, frame):
+    def _recognize_plates(self, device_id, frame, frame_count):
         """
-        执行车牌识别
+        执行车牌检测与识别
 
         Args:
             device_id: 设备ID
             frame: 视频帧
         """
         try:
-            # 1. 检测车辆
-            vehicles = self.vehicle_detector.detect(frame)
+            print(f"🔎 帧 {frame_count}: 开始车牌检测")
+            plates = self.plate_detector.detect(frame)
 
-            if not vehicles:
+            if not plates:
+                print(f"⏳ 帧 {frame_count}: 未检测到车牌")
                 return
 
-            # 2. 对每个车辆尝试识别车牌
-            for vehicle in vehicles:
-                bbox = vehicle['bbox']
+            print("\n" + "=" * 60)
+            print(f"🔵 检测到 {len(plates)} 个车牌区域！")
+            print("=" * 60)
+
+            for idx, plate in enumerate(plates):
+                bbox = plate['bbox']
                 x1, y1, x2, y2 = bbox
+                plate_img = frame[y1:y2, x1:x2]
 
-                # 裁剪车辆区域
-                vehicle_img = frame[y1:y2, x1:x2]
-
-                if vehicle_img.size == 0:
-                    continue
-
-                # 简单的车牌区域估计（通常在车辆下半部分）
-                h, w = vehicle_img.shape[:2]
-                plate_region = vehicle_img[int(h*0.6):h, :]  # 下40%区域
-
-                if plate_region.size == 0:
+                if plate_img is None or plate_img.size == 0:
+                    print(f"⚠️  车牌 #{idx + 1} 裁剪为空，跳过")
                     continue
 
                 try:
-                    # 3. 识别车牌
-                    plate_number = self.plate_recognizer.recognize(plate_region)
-
-                    # 过滤无效结果（太短或包含过多'-'）
-                    if len(plate_number) < 6 or plate_number.count('-') > 2:
-                        continue
-
-                    # 4. 生成识别结果
-                    result = {
-                        'event_type': 'plate_recognition',
-                        'timestamp': datetime.now().isoformat(),
-                        'device_id': device_id,
-                        'data': {
-                            'plate_number': plate_number,
-                            'vehicle_type': vehicle['class_name'],
-                            'confidence': vehicle['confidence'],
-                            'is_in_whitelist': self._check_whitelist(plate_number),
-                            'decision': self._make_decision(plate_number)
-                        },
-                        'bbox': bbox,
-                        'status': 'normal'
-                    }
-
-                    # 5. 保存结果
-                    self.results_queue.put(result)
-
-                    # 6. 打印到控制台
-                    print("\n" + "=" * 60)
-                    print("🚗 车牌识别成功！")
-                    print("=" * 60)
-                    print(f"   车牌号: {plate_number}")
-                    print(f"   车辆类型: {vehicle['class_name']}")
-                    print(f"   置信度: {vehicle['confidence']:.2f}")
-                    print(f"   白名单: {'✅ 是' if result['data']['is_in_whitelist'] else '❌ 否'}")
-                    print(f"   通行决策: {'🟢 允许' if result['data']['decision'] == 'allow' else '🔴 拒绝'}")
-                    print(f"   位置: {bbox}")
-                    print("=" * 60)
-
+                    plate_number = self.plate_recognizer.recognize(plate_img)
                 except Exception as e:
-                    # 识别失败，跳过
+                    print(f"⚠️  车牌 #{idx + 1} OCR 失败: {str(e)}")
                     continue
+
+                if not plate_number or len(plate_number.strip()) < 4:
+                    print(f"⚠️  车牌 #{idx + 1} OCR 结果过短: {plate_number!r}")
+                    continue
+
+                result = {
+                    'event_type': 'plate_recognition',
+                    'timestamp': datetime.now().isoformat(),
+                    'device_id': device_id,
+                    'data': {
+                        'plate_number': plate_number,
+                        'vehicle_type': 'unknown',
+                        'confidence': plate['confidence'],
+                        'is_in_whitelist': self._check_whitelist(plate_number),
+                        'decision': self._make_decision(plate_number)
+                    },
+                    'bbox': bbox,
+                    'status': 'normal'
+                }
+
+                self.results_queue.put(result)
+
+                print(f"   车牌 #{idx + 1}:")
+                print(f"      车牌号: {plate_number}")
+                print(f"      置信度: {plate['confidence']:.2f}")
+                print(f"      白名单: {'✅ 是' if result['data']['is_in_whitelist'] else '❌ 否'}")
+                print(f"      通行决策: {'🟢 允许' if result['data']['decision'] == 'allow' else '🔴 拒绝'}")
+                print(f"      位置: {bbox}")
+
+            print("=" * 60)
 
         except Exception as e:
             print(f"⚠️  车牌识别处理异常: {str(e)}")
@@ -240,8 +295,6 @@ class PlateRecognitionProcessor:
         Returns:
             bool: 是否在白名单
         """
-        # TODO: 从数据库加载白名单
-        # 临时白名单
         whitelist = ['京A12345', '沪B67890', '粤C88888', '京D99999']
         return plate_number in whitelist
 
@@ -274,7 +327,6 @@ class PlateRecognitionProcessor:
 
 
 if __name__ == '__main__':
-    # 测试代码
     from device_manager import DeviceManager
 
     device_manager = DeviceManager()

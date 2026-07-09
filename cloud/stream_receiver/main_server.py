@@ -242,14 +242,51 @@ def handle_request_devices():
     emit('devices_list', {'devices': device_list})
 
 
+@socketio.on('client_command')
+def handle_client_command(data):
+    """前端通用控制指令入口"""
+    command = data.get('command')
+    device_id = data.get('device_id')
+
+    print(f"前端控制指令: command={command}, payload={data}")
+
+    if command == 'switch_scene':
+        scene_id = data.get('scene_id', 'vehicle_detection')
+        video_processor.set_active_scene(scene_id, device_id=device_id)
+        emit('scene_switched', {'device_id': device_id, 'scene_id': scene_id})
+        return
+
+    if command == 'set_threshold':
+        threshold = data.get('threshold', 30)
+        video_processor.set_parking_threshold(threshold, device_id=device_id)
+        emit('threshold_updated', {'device_id': device_id, 'threshold': threshold})
+        return
+
+    if command == 'set_confidence':
+        confidence = data.get('confidence', 0.45)
+        video_processor.set_vehicle_confidence(confidence)
+        emit('confidence_updated', {'confidence': confidence})
+        return
+
+    if command == 'start_analysis':
+        emit('analysis_status', {'status': 'running'})
+        return
+
+    if command == 'stop_analysis':
+        emit('analysis_status', {'status': 'stopped'})
+        return
+
+    emit('command_ack', {'status': 'ignored', 'payload': data})
+
+
 @socketio.on('switch_scene')
 def handle_switch_scene(data):
-    """前端请求切换场景"""
-    device_id = data.get('device_id')
-    scene_id = data.get('scene_id')
-    print(f"切换场景请求: device={device_id}, scene={scene_id}")
-    # TODO: 实现场景切换逻辑
-    emit('scene_switched', {'device_id': device_id, 'scene_id': scene_id})
+    """兼容旧前端直接发送 switch_scene 事件。"""
+    handle_client_command({
+        'command': 'switch_scene',
+        'scene_id': data.get('scene_id'),
+        'device_id': data.get('device_id'),
+    })
 
 
 # ==================== 启动服务器 ====================

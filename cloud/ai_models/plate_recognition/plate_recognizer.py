@@ -2,6 +2,7 @@
 车牌识别模块
 使用LPRNet进行中国车牌字符识别
 """
+import os
 import torch
 import torch.nn as nn
 import cv2
@@ -126,10 +127,35 @@ class PlateRecognizer:
 
         # 加载权重
         self.model.to(self.device)
-        self.model.load_state_dict(torch.load(model_path, map_location=self.device))
+        state_dict = self._load_compatible_state_dict(model_path)
+        self.model.load_state_dict(state_dict, strict=True)
         self.model.eval()
 
         print("车牌识别器初始化完成")
+
+    def _load_compatible_state_dict(self, model_path):
+        """兼容纯 state_dict 与包含 model_state_dict 的 checkpoint。"""
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"LPRNet 模型不存在: {model_path}")
+
+        checkpoint = torch.load(model_path, map_location=self.device)
+
+        # 训练脚本保存格式：{'model_state_dict': ..., ...}
+        if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+            state_dict = checkpoint['model_state_dict']
+        else:
+            state_dict = checkpoint
+
+        # 新训练脚本模型结构与当前 cloud 运行结构不同，不能直接复用
+        sample_keys = list(state_dict.keys())[:5]
+        if sample_keys and any(key.startswith('stage') for key in sample_keys):
+            raise ValueError(
+                "当前 checkpoint 来自新的 UI LPRNet 训练结构（stage*），"
+                "与 cloud 运行时 LPRNet 结构不兼容，请优先使用 Final_LPRNet_model.pth "
+                "或 ui/models/pretrained_lprnet.pth。"
+            )
+
+        return state_dict
 
     def preprocess(self, plate_img):
         """
@@ -141,10 +167,13 @@ class PlateRecognizer:
         Returns:
             torch.Tensor: 预处理后的tensor
         """
+        if plate_img is None or plate_img.size == 0:
+            raise ValueError("空车牌图像，无法识别")
+
         # 调整大小到94x24
         img = cv2.resize(plate_img, self.img_size)
 
-        # 转换为float并归一化
+        # 转换为float并归一化（与 cloud 原始推理 & 新 dataset 预处理保持一致）
         img = img.astype('float32')
         img -= 127.5
         img *= 0.0078125

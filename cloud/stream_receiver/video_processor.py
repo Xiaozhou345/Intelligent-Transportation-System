@@ -1,43 +1,53 @@
 """
 视频流处理引擎
-负责从RTMP拉取视频流、解帧、送入AI模型、推送结果到前端
+负责从 RTMP 拉取视频流、解帧、送入 AI 模型、推送结果到前端。
+
+当前主链路复用同一套车辆 YOLO 检测结果，同时服务于：
+1. 车辆检测事件（可选）
+2. 拥堵统计 / 热力图
+3. 违停跟踪与告警（YOLO + ByteTrack + 业务规则）
+4. 道路异常检测中的车辆掩膜
 """
 import cv2
 import threading
 import time
 from datetime import datetime
-from queue import Queue
+from pathlib import Path
 import json
 import os
 import sys
-from pathlib import Path
+from typing import Dict, List, Optional
 
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 AI_MODELS_DIR = os.path.join(CURRENT_DIR, "..", "ai_models")
 VEHICLE_DETECTION_DIR = os.path.join(AI_MODELS_DIR, "vehicle_detection")
+VEHICLE_TRACKING_DIR = os.path.join(AI_MODELS_DIR, "vehicle_tracking")
+BUSINESS_LOGIC_DIR = os.path.join(os.path.dirname(CURRENT_DIR), "business_logic")
 REPO_ROOT = Path(CURRENT_DIR).parents[1]
 if AI_MODELS_DIR not in sys.path:
     sys.path.append(AI_MODELS_DIR)
 if VEHICLE_DETECTION_DIR not in sys.path:
     sys.path.append(VEHICLE_DETECTION_DIR)
+if VEHICLE_TRACKING_DIR not in sys.path:
+    sys.path.append(VEHICLE_TRACKING_DIR)
+if BUSINESS_LOGIC_DIR not in sys.path:
+    sys.path.append(BUSINESS_LOGIC_DIR)
+
+from detector import VehicleDetector
+from vehicle_tracker import VehicleTracker
+from illegal_parking import IllegalParkingMonitor
 
 
 class VideoProcessor:
     """视频流处理器"""
 
     def __init__(self, device_manager, socketio):
-        """
-        初始化视频处理器
-
-        Args:
-            device_manager: 设备管理器实例
-            socketio: SocketIO实例，用于推送结果
-        """
         self.device_manager = device_manager
         self.socketio = socketio
         self.active_streams = {}  # {device_id: thread}
         self.stop_flags = {}  # {device_id: stop_event}
+
         self.frame_skip = int(os.getenv("ITS_FRAME_SKIP", "10"))
         self.enable_mock_fallback = os.getenv("ITS_ENABLE_MOCK_FALLBACK", "true").lower() == "true"
         self.disable_vehicle_mask = os.getenv("ITS_DISABLE_VEHICLE_MASK", "false").lower() == "true"
@@ -45,15 +55,43 @@ class VideoProcessor:
         self.emit_vehicle_events = os.getenv("ITS_EMIT_VEHICLE_EVENTS", "false").lower() == "true"
         self.disable_drivable_segmenter = os.getenv("ITS_DISABLE_DRIVABLE_SEGMENTER", "true").lower() == "true"
         self.debug_output_dir = REPO_ROOT / "data" / "sandbox_anomaly" / "output"
+
         self.anomaly_processor = None
         self.vehicle_detector = None
+        self.vehicle_conf = float(os.getenv("ITS_VEHICLE_CONF", "0.45"))
+
+        self.runtime_defaults = self._load_runtime_defaults()
+        self.runtime_state: Dict[str, dict] = {}
 
         self._init_sandbox_ai()
-
         print("视频处理引擎初始化完成")
 
+    def _load_runtime_defaults(self):
+        config_path = Path(CURRENT_DIR) / "illegal_parking_config.json"
+        defaults = {
+            "traffic_regions": [],
+            "traffic_thresholds": {"smooth_max": 2, "slow_max": 5},
+            "no_parking_zones": [],
+            "parking_stationary_pixel_threshold": 18,
+            "parking_release_grace_frames": 3,
+            "parking_min_history": 3,
+            "density_emit_every_processed_frames": 3,
+            "active_scene": "vehicle_detection",
+        }
+        if not config_path.exists():
+            print("⚠️  未找到 illegal_parking_config.json，将使用内置默认配置")
+            return defaults
+
+        try:
+            data = json.loads(config_path.read_text(encoding="utf-8"))
+            file_defaults = data.get("default", {})
+            defaults.update(file_defaults)
+            print(f"✅ 已加载违停/热力图配置: {config_path}")
+        except Exception as exc:
+            print(f"⚠️  违停配置加载失败，将使用内置默认配置: {exc}")
+        return defaults
+
     def _init_sandbox_ai(self):
-        """Initialize sandbox-oriented AI modules without making server startup fragile."""
         if os.getenv("ITS_ENABLE_SANDBOX_AI", "true").lower() != "true":
             print("沙盘AI检测已通过环境变量关闭")
             return
@@ -99,8 +137,6 @@ class VideoProcessor:
             return
 
         try:
-            from detector import VehicleDetector
-
             sandbox_model_path = os.path.join(AI_MODELS_DIR, "vehicle_detection", "sandbox_vehicle_best.pt")
             default_model_path = os.path.join(AI_MODELS_DIR, "vehicle_detection", "yolo11s.pt")
             yolo_path = sandbox_model_path if os.path.exists(sandbox_model_path) else default_model_path
@@ -110,34 +146,73 @@ class VideoProcessor:
 
             self.vehicle_detector = VehicleDetector(
                 model_path=yolo_path,
-                conf_threshold=float(os.getenv("ITS_VEHICLE_CONF", "0.45")),
+                conf_threshold=self.vehicle_conf,
             )
-            print("✅ 沙盘车辆掩膜检测已启用")
+            print("✅ 共享车辆检测已启用（服务于拥堵/违停/异常检测）")
         except Exception as e:
-            print(f"⚠️  车辆掩膜检测初始化失败，道路异常检测将继续运行: {str(e)}")
+            print(f"⚠️  车辆检测初始化失败，道路异常检测将继续运行: {str(e)}")
             self.vehicle_detector = None
 
-    def start_processing(self, device_id, stream_url):
-        """
-        启动视频流处理
+    def _get_or_create_runtime_state(self, device_id, frame_shape=None):
+        state = self.runtime_state.get(device_id)
+        if state is None:
+            state = {
+                "tracker": VehicleTracker(
+                    max_time_lost=int(os.getenv("ITS_TRACKER_MAX_LOST", "30")),
+                    track_thresh=float(os.getenv("ITS_TRACKER_TRACK_THRESH", "0.45")),
+                    match_thresh=float(os.getenv("ITS_TRACKER_MATCH_THRESH", "0.5")),
+                ),
+                "parking_monitor": IllegalParkingMonitor(
+                    stationary_pixel_threshold=float(self.runtime_defaults.get("parking_stationary_pixel_threshold", 18)),
+                    release_grace_frames=int(self.runtime_defaults.get("parking_release_grace_frames", 3)),
+                    min_history=int(self.runtime_defaults.get("parking_min_history", 3)),
+                ),
+                "frame_shape": None,
+                "traffic_regions": [],
+                "no_parking_zones": [],
+                "traffic_thresholds": dict(self.runtime_defaults.get("traffic_thresholds", {"smooth_max": 2, "slow_max": 5})),
+                "density_emit_every_processed_frames": int(self.runtime_defaults.get("density_emit_every_processed_frames", 3)),
+                "processed_frames": 0,
+                "active_scene": self.runtime_defaults.get("active_scene", "vehicle_detection"),
+            }
+            self.runtime_state[device_id] = state
 
-        Args:
-            device_id: 设备ID
-            stream_url: RTMP流地址
-        """
+        if frame_shape is not None and state["frame_shape"] != frame_shape:
+            state["frame_shape"] = frame_shape
+            state["traffic_regions"] = self._scale_regions(self.runtime_defaults.get("traffic_regions", []), frame_shape)
+            state["no_parking_zones"] = self._scale_regions(self.runtime_defaults.get("no_parking_zones", []), frame_shape)
+            state["parking_monitor"].zones = state["no_parking_zones"]
+        return state
+
+    @staticmethod
+    def _scale_regions(regions, frame_shape):
+        height, width = frame_shape[:2]
+        scaled = []
+        for region in regions:
+            polygon = []
+            for x, y in region.get("polygon", []):
+                if 0 <= x <= 1 and 0 <= y <= 1:
+                    polygon.append([int(round(x * width)), int(round(y * height))])
+                else:
+                    polygon.append([int(round(x)), int(round(y))])
+            item = dict(region)
+            item["polygon"] = polygon
+            scaled.append(item)
+        return scaled
+
+    def start_processing(self, device_id, stream_url):
         if device_id in self.active_streams:
             print(f"设备 {device_id} 已在处理中")
             return False
 
-        # 创建停止标志
         stop_event = threading.Event()
         self.stop_flags[device_id] = stop_event
+        self._get_or_create_runtime_state(device_id)
 
-        # 启动处理线程
         thread = threading.Thread(
             target=self._process_stream,
             args=(device_id, stream_url, stop_event),
-            daemon=True
+            daemon=True,
         )
         thread.start()
         self.active_streams[device_id] = thread
@@ -146,43 +221,25 @@ class VideoProcessor:
         return True
 
     def stop_processing(self, device_id):
-        """
-        停止视频流处理
-
-        Args:
-            device_id: 设备ID
-        """
         if device_id not in self.active_streams:
             print(f"设备 {device_id} 未在处理中")
             return False
 
-        # 设置停止标志
         self.stop_flags[device_id].set()
-
-        # 等待线程结束
         self.active_streams[device_id].join(timeout=5)
 
-        # 清理
         del self.active_streams[device_id]
         del self.stop_flags[device_id]
+        self.runtime_state.pop(device_id, None)
 
         print(f"停止处理设备 {device_id} 的视频流")
         return True
 
     def _process_stream(self, device_id, stream_url, stop_event):
-        """
-        视频流处理主循环
-
-        Args:
-            device_id: 设备ID
-            stream_url: RTMP流地址
-            stop_event: 停止事件
-        """
         cap = None
         frame_count = 0
 
         try:
-            # RTMP 推流端可能比设备注册晚几秒真正出画面，沙盘演示时这里耐心重试。
             open_attempts = 0
             max_open_attempts = int(os.getenv("ITS_RTMP_OPEN_ATTEMPTS", "60"))
             while not stop_event.is_set() and open_attempts < max_open_attempts:
@@ -219,15 +276,10 @@ class VideoProcessor:
                     continue
 
                 frame_count += 1
-
-                # 跳帧策略：每3帧处理1帧
                 if frame_count % self.frame_skip != 0:
                     continue
 
-                # 处理帧
                 self._analyze_frame(device_id, frame, frame_count)
-
-                # 控制处理速度
                 time.sleep(0.1)
 
         except Exception as e:
@@ -240,79 +292,73 @@ class VideoProcessor:
             print(f"视频流处理结束: {device_id}")
 
     def _analyze_frame(self, device_id, frame, frame_count):
-        """
-        分析单帧图像
-
-        Args:
-            device_id: 设备ID
-            frame: 图像帧
-            frame_count: 帧计数
-        """
         timestamp = datetime.now().isoformat()
+        state = self._get_or_create_runtime_state(device_id, frame.shape)
+        state["processed_frames"] += 1
+
+        if not self.vehicle_detector:
+            if self.enable_mock_fallback and frame_count % 10 == 0:
+                event_type = self._get_event_type(frame_count)
+                result = self._generate_mock_result(device_id, timestamp, event_type)
+                self._send_result(result)
+            return
+
+        vehicles = self.vehicle_detector.detect(frame)
+        tracked_vehicles = state["tracker"].update(vehicles)
+        vehicle_bboxes = [
+            vehicle["bbox"]
+            for vehicle in vehicles
+            if vehicle.get("confidence", 0) >= self.vehicle_mask_min_conf
+        ]
+
+        if vehicles and frame_count % 30 == 0:
+            vehicle_debug = [
+                {
+                    "bbox": vehicle["bbox"],
+                    "conf": round(vehicle.get("confidence", 0), 3),
+                    "masked": vehicle.get("confidence", 0) >= self.vehicle_mask_min_conf,
+                }
+                for vehicle in vehicles
+            ]
+            print(
+                f"帧 {frame_count}: 车辆检测 {len(vehicles)} 个，"
+                f"用于掩膜 {len(vehicle_bboxes)} 个 {vehicle_debug}"
+            )
+
+        if self.emit_vehicle_events:
+            for idx, vehicle in enumerate(vehicles):
+                self._send_result({
+                    "event_type": "vehicle_detection",
+                    "timestamp": timestamp,
+                    "device_id": device_id,
+                    "data": {
+                        "vehicle_id": idx + 1,
+                        "vehicle_type": vehicle["class_name"],
+                        "confidence": vehicle["confidence"],
+                    },
+                    "bbox": vehicle["bbox"],
+                    "status": "detected",
+                })
+
+        traffic_event = self._build_traffic_density_event(device_id, state, tracked_vehicles, timestamp)
+        if traffic_event is not None:
+            self._send_result(traffic_event)
+
+        parking_events = state["parking_monitor"].update(device_id, tracked_vehicles, timestamp)
+        for event in parking_events:
+            self._send_result(event)
+            print(
+                f"违停告警: track_id={event['data'].get('track_id')} "
+                f"stay_time={event['data'].get('stay_time')}s bbox={event.get('bbox')}"
+            )
 
         if self.anomaly_processor:
-            self._analyze_road_anomaly(device_id, frame, frame_count, timestamp)
-            return
-
-        if not self.enable_mock_fallback:
-            return
-
-        # 每10帧生成一次模拟结果
-        if frame_count % 10 == 0:
-            event_type = self._get_event_type(frame_count)
-            result = self._generate_mock_result(device_id, timestamp, event_type)
-
-            # 通过WebSocket推送结果
-            self._send_result(result)
-
-    def _analyze_road_anomaly(self, device_id, frame, frame_count, timestamp):
-        """Run the real sandbox road-anomaly detector and push warning events."""
-        try:
-            vehicle_bboxes = []
-            if self.vehicle_detector:
-                vehicles = self.vehicle_detector.detect(frame)
-                vehicle_bboxes = [
-                    vehicle["bbox"]
-                    for vehicle in vehicles
-                    if vehicle.get("confidence", 0) >= self.vehicle_mask_min_conf
-                ]
-
-                if vehicles and frame_count % 30 == 0:
-                    vehicle_debug = [
-                        {
-                            "bbox": vehicle["bbox"],
-                            "conf": round(vehicle.get("confidence", 0), 3),
-                            "masked": vehicle.get("confidence", 0) >= self.vehicle_mask_min_conf,
-                        }
-                        for vehicle in vehicles
-                    ]
-                    print(
-                        f"帧 {frame_count}: 车辆检测 {len(vehicles)} 个，"
-                        f"用于掩膜 {len(vehicle_bboxes)} 个 {vehicle_debug}"
-                    )
-
-                if self.emit_vehicle_events:
-                    for idx, vehicle in enumerate(vehicles):
-                        self._send_result({
-                            "event_type": "vehicle_detection",
-                            "timestamp": timestamp,
-                            "device_id": device_id,
-                            "data": {
-                                "vehicle_id": idx + 1,
-                                "vehicle_type": vehicle["class_name"],
-                                "confidence": vehicle["confidence"],
-                            },
-                            "bbox": vehicle["bbox"],
-                            "status": "detected",
-                        })
-
             events = self.anomaly_processor.process_frame(
                 device_id=device_id,
                 frame=frame,
                 vehicle_bboxes=vehicle_bboxes,
                 timestamp=timestamp,
             )
-
             for event in events:
                 self._send_result(event)
                 print(
@@ -328,11 +374,106 @@ class VideoProcessor:
                 )
                 self._save_debug_frame(frame, frame_count, vehicle_bboxes, events)
                 self._save_road_mask_debug(frame, frame_count)
-        except Exception as e:
-            print(f"⚠️  道路异常检测处理异常: {str(e)}")
+
+    def _build_traffic_density_event(self, device_id, state, tracked_vehicles, timestamp):
+        emit_every = max(1, int(state.get("density_emit_every_processed_frames", 3)))
+        if state["processed_frames"] % emit_every != 0:
+            return None
+
+        thresholds = state.get("traffic_thresholds", {"smooth_max": 2, "slow_max": 5})
+        smooth_max = thresholds.get("smooth_max", 2)
+        slow_max = thresholds.get("slow_max", 5)
+
+        regions = []
+        for region in state.get("traffic_regions", []):
+            count = 0
+            for tracked in tracked_vehicles:
+                anchor = self._bottom_center(tracked["bbox"])
+                if self._point_in_polygon(anchor, region.get("polygon", [])):
+                    count += 1
+
+            if count <= smooth_max:
+                status = "smooth"
+                color = "green"
+            elif count <= slow_max:
+                status = "slow"
+                color = "yellow"
+            else:
+                status = "congested"
+                color = "red"
+
+            regions.append({
+                "region_id": region.get("region_id", "road"),
+                "vehicle_count": count,
+                "status": status,
+                "color": color,
+            })
+
+        if not regions:
+            return None
+
+        return {
+            "event_type": "traffic_density",
+            "timestamp": timestamp,
+            "device_id": device_id,
+            "status": "normal",
+            "data": {
+                "regions": regions,
+            },
+        }
+
+    def set_active_scene(self, scene_id, device_id=None):
+        if device_id and device_id in self.runtime_state:
+            self.runtime_state[device_id]["active_scene"] = scene_id
+        else:
+            self.runtime_defaults["active_scene"] = scene_id
+            for state in self.runtime_state.values():
+                state["active_scene"] = scene_id
+        print(f"已切换场景: {scene_id}")
+
+    def set_parking_threshold(self, threshold_seconds, device_id=None):
+        threshold_seconds = float(threshold_seconds)
+        self.runtime_defaults.setdefault("no_parking_zones", [])
+        for zone in self.runtime_defaults.get("no_parking_zones", []):
+            zone["threshold_seconds"] = threshold_seconds
+        targets = [self.runtime_state[device_id]] if device_id and device_id in self.runtime_state else self.runtime_state.values()
+        for state in targets:
+            for zone in state.get("no_parking_zones", []):
+                zone["threshold_seconds"] = threshold_seconds
+            state["parking_monitor"].zones = state.get("no_parking_zones", [])
+        print(f"已更新违停阈值: {threshold_seconds}s")
+
+    def set_vehicle_confidence(self, confidence):
+        confidence = float(confidence)
+        self.vehicle_conf = confidence
+        if self.vehicle_detector:
+            self.vehicle_detector.conf_threshold = confidence
+        print(f"已更新车辆检测置信度阈值: {confidence}")
+
+    @staticmethod
+    def _bottom_center(bbox):
+        x1, y1, x2, y2 = bbox
+        return int((x1 + x2) / 2), int(y2)
+
+    @staticmethod
+    def _point_in_polygon(point, polygon):
+        if len(polygon) < 3:
+            return False
+        x, y = point
+        inside = False
+        j = len(polygon) - 1
+        for i in range(len(polygon)):
+            xi, yi = polygon[i]
+            xj, yj = polygon[j]
+            intersects = ((yi > y) != (yj > y)) and (
+                x < (xj - xi) * (y - yi) / ((yj - yi) or 1e-9) + xi
+            )
+            if intersects:
+                inside = not inside
+            j = i
+        return inside
 
     def _save_debug_frame(self, frame, frame_count, vehicle_bboxes, events):
-        """Write a lightweight snapshot so sandbox tuning can inspect boxes."""
         try:
             self.debug_output_dir.mkdir(parents=True, exist_ok=True)
             output = frame.copy()
@@ -363,22 +504,10 @@ class VideoProcessor:
             print(f"⚠️  道路mask调试图保存失败: {str(e)}")
 
     def _get_event_type(self, frame_count):
-        """根据帧数循环返回不同事件类型"""
         types = ['plate_recognition', 'traffic_density', 'illegal_parking', 'road_anomaly']
         return types[(frame_count // 10) % len(types)]
 
     def _generate_mock_result(self, device_id, timestamp, event_type):
-        """
-        生成模拟分析结果
-
-        Args:
-            device_id: 设备ID
-            timestamp: 时间戳
-            event_type: 事件类型
-
-        Returns:
-            dict: 分析结果
-        """
         base_result = {
             'event_type': event_type,
             'timestamp': timestamp,
@@ -424,12 +553,6 @@ class VideoProcessor:
         return base_result
 
     def _send_result(self, result):
-        """
-        通过WebSocket发送结果到前端
-
-        Args:
-            result: 分析结果字典
-        """
         try:
             self.socketio.emit('analysis_result', result)
             print(f"推送结果: {result['event_type']}")
@@ -437,13 +560,6 @@ class VideoProcessor:
             print(f"推送结果失败: {str(e)}")
 
     def _send_error(self, device_id, error_message):
-        """
-        发送错误信息
-
-        Args:
-            device_id: 设备ID
-            error_message: 错误消息
-        """
         try:
             self.socketio.emit('error', {
                 'device_id': device_id,
@@ -454,12 +570,10 @@ class VideoProcessor:
             print(f"发送错误信息失败: {str(e)}")
 
     def get_active_streams(self):
-        """获取当前活跃的视频流列表"""
         return list(self.active_streams.keys())
 
 
 if __name__ == '__main__':
-    # 测试代码
     from device_manager import DeviceManager
 
     class MockSocketIO:
@@ -470,8 +584,6 @@ if __name__ == '__main__':
     socketio = MockSocketIO()
 
     processor = VideoProcessor(device_manager, socketio)
-
-    # 注册测试设备
     device_manager.register_device(
         device_id="test_001",
         stream_url="rtmp://localhost:1935/live/test_001",
