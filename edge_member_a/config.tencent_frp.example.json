@@ -1,5 +1,7 @@
 {
   "cloud_api_base": "http://106.54.10.11:15000",
+  "stream_url": "rtsp://106.54.10.11:8554/live/mobile_001",
+  "srt_push_url": "srt://106.54.10.11:8890?streamid=publish:live/mobile_001&latency=200",
   "rtmp_server": "106.54.10.11",
   "rtmp_port": 1935,
   "rtmp_app": "live",

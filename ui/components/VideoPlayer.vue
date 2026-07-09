@@ -7,6 +7,10 @@ const props = defineProps({
     type: String,
     required: true
   },
+  webrtcSrc: {
+    type: String,
+    default: ''
+  },
   analysisMode: {
     type: String,
     default: '车辆检测'
@@ -33,7 +37,11 @@ const videoRef = ref(null)
 const canvasRef = ref(null)
 const containerRef = ref(null)
 const pendingBoxes = ref([])
+const playbackProtocol = ref('初始化')
 let hls = null
+let peerConnection = null
+let whepResourceUrl = ''
+let webrtcFallbackTimer = null
 
 const destroyHls = () => {
   if (hls) {
@@ -42,22 +50,67 @@ const destroyHls = () => {
   }
 }
 
-const loadVideoSource = () => {
+const destroyWebrtc = async () => {
+  if (webrtcFallbackTimer) {
+    window.clearTimeout(webrtcFallbackTimer)
+    webrtcFallbackTimer = null
+  }
+  if (whepResourceUrl) {
+    fetch(whepResourceUrl, { method: 'DELETE' }).catch(() => {})
+    whepResourceUrl = ''
+  }
+  if (peerConnection) {
+    peerConnection.close()
+    peerConnection = null
+  }
+}
+
+const waitForIceGathering = (pc) => {
+  if (pc.iceGatheringState === 'complete') return Promise.resolve()
+
+  return new Promise((resolve) => {
+    const timeout = window.setTimeout(resolve, 1500)
+    const checkState = () => {
+      if (pc.iceGatheringState === 'complete') {
+        window.clearTimeout(timeout)
+        pc.removeEventListener('icegatheringstatechange', checkState)
+        resolve()
+      }
+    }
+    pc.addEventListener('icegatheringstatechange', checkState)
+  })
+}
+
+const loadHlsSource = () => {
   const video = videoRef.value
   if (!video) return
 
   destroyHls()
+  video.srcObject = null
+  playbackProtocol.value = 'HLS'
 
   if (props.videoSrc.endsWith('.m3u8')) {
     if (Hls.isSupported()) {
       hls = new Hls({
         lowLatencyMode: true,
-        backBufferLength: 30
+        liveSyncDurationCount: 1,
+        liveMaxLatencyDurationCount: 3,
+        maxLiveSyncPlaybackRate: 1.5,
+        maxBufferLength: 5,
+        maxMaxBufferLength: 8,
+        backBufferLength: 10,
+        enableWorker: true
       })
       hls.loadSource(props.videoSrc)
       hls.attachMedia(video)
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         video.play().catch(() => {})
+      })
+      hls.on(Hls.Events.LEVEL_LOADED, () => {
+        const liveSyncPosition = hls.liveSyncPosition
+        if (Number.isFinite(liveSyncPosition) && video.currentTime < liveSyncPosition - 3) {
+          video.currentTime = liveSyncPosition
+        }
       })
       hls.on(Hls.Events.ERROR, (_, data) => {
         console.error('HLS 播放错误:', data)
@@ -75,6 +128,102 @@ const loadVideoSource = () => {
 
   video.src = props.videoSrc
   video.load()
+}
+
+const loadWebrtcSource = async () => {
+  const video = videoRef.value
+  if (!video || !props.webrtcSrc || !window.RTCPeerConnection) return false
+
+  await destroyWebrtc()
+
+  const pc = new RTCPeerConnection({
+    iceServers: []
+  })
+  peerConnection = pc
+
+  pc.addTransceiver('video', { direction: 'recvonly' })
+
+  pc.ontrack = (event) => {
+    const [stream] = event.streams
+    if (stream && video.srcObject !== stream) {
+      destroyHls()
+      video.removeAttribute('src')
+      video.srcObject = stream
+      playbackProtocol.value = 'WebRTC'
+      video.play().catch(() => {})
+    }
+  }
+
+  pc.onconnectionstatechange = () => {
+    console.info('WebRTC connection state:', pc.connectionState)
+    if (pc.connectionState === 'connected' && webrtcFallbackTimer) {
+      window.clearTimeout(webrtcFallbackTimer)
+      webrtcFallbackTimer = null
+      return
+    }
+
+    if (pc.connectionState === 'disconnected' && !webrtcFallbackTimer) {
+      webrtcFallbackTimer = window.setTimeout(() => {
+        if (peerConnection === pc && pc.connectionState === 'disconnected') {
+          console.warn('WebRTC 播放长时间断开，回退到 HLS')
+          loadHlsSource()
+        }
+      }, 5000)
+      return
+    }
+
+    if (pc.connectionState === 'failed') {
+      console.warn('WebRTC 播放连接失败，回退到 HLS')
+      loadHlsSource()
+    }
+  }
+
+  const offer = await pc.createOffer()
+  await pc.setLocalDescription(offer)
+  await waitForIceGathering(pc)
+
+  const response = await fetch(props.webrtcSrc, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/sdp',
+      'Accept': 'application/sdp'
+    },
+    body: pc.localDescription.sdp
+  })
+
+  if (!response.ok) {
+    throw new Error(`WHEP request failed: ${response.status}`)
+  }
+
+  whepResourceUrl = response.headers.get('Location') || ''
+  if (whepResourceUrl && !/^https?:\/\//.test(whepResourceUrl)) {
+    whepResourceUrl = new URL(whepResourceUrl, props.webrtcSrc).toString()
+  }
+
+  const answer = await response.text()
+  await pc.setRemoteDescription({ type: 'answer', sdp: answer })
+  return true
+}
+
+const loadVideoSource = async () => {
+  const video = videoRef.value
+  if (!video) return
+
+  destroyHls()
+  await destroyWebrtc()
+  video.srcObject = null
+
+  if (props.webrtcSrc) {
+    try {
+      playbackProtocol.value = 'WebRTC连接中'
+      const loaded = await loadWebrtcSource()
+      if (loaded) return
+    } catch (error) {
+      console.error('WebRTC 播放失败，回退到 HLS:', error)
+    }
+  }
+
+  loadHlsSource()
 }
 
 const updateCanvasSize = () => {
@@ -179,10 +328,17 @@ onMounted(() => {
 
 onUnmounted(() => {
   destroyHls()
+  destroyWebrtc()
   window.removeEventListener('resize', handleResize)
 })
 
 watch(() => props.videoSrc, async () => {
+  await nextTick()
+  loadVideoSource()
+  updateCanvasSize()
+})
+
+watch(() => props.webrtcSrc, async () => {
   await nextTick()
   loadVideoSource()
   updateCanvasSize()
@@ -204,6 +360,7 @@ defineExpose({
       <div class="status-metrics">
         <span>目标 {{ detectionCount }}</span>
         <span>延迟 {{ latency }}ms</span>
+        <span>{{ playbackProtocol }}</span>
         <span>{{ streamStatus }}</span>
       </div>
     </div>

@@ -8,17 +8,18 @@
 
 ```
 边端（移动设备）
-    ↓ 视频采集 & RTMP推流
-云端（电脑A - AI分析服务器）
-    ↓ 视频接收 & AI推理 & 业务逻辑
-前端（电脑B - 可视化展示）
-    ↓ 实时展示 & 告警管理
+    ↓ SRT/RTMP 推流
+腾讯云 MediaMTX（轻量流媒体中转）
+    ↓ WHEP/WebRTC 播放流       ↓ RTSP 取帧流
+前端（Vue 可视化展示）         本地 AI 电脑（检测/识别/告警）
+    ↓ 实时展示 & 告警管理       ↓ WebSocket/API 推送结果
 ```
 
 ### 物理部署
-- **边端（移动设备）**: 实时视频流/视频段采集与网络推流
-- **云端（电脑A）**: 接收视频流，提供AI算力，运行多模型智能调度
-- **前端（电脑B）**: 接收分析结果，进行大屏可视化渲染与告警展示
+- **边端（移动设备）**: 使用支持 SRT/RTMP 的推流 App 采集摄像头并推到公网服务器
+- **腾讯云轻量服务器**: 运行 MediaMTX，只负责接收、转发和封装视频流，不跑 AI 推理
+- **本地 AI 电脑**: 从云端 RTSP 拉流取帧，运行车辆检测、车牌识别、道路异常检测等模型
+- **前端展示端**: 优先通过 WHEP/WebRTC 播放云端低延迟视频流，并展示本地 AI 推送的分析结果
 
 ## 核心功能
 
@@ -50,7 +51,7 @@
 ## 技术栈
 
 ### 边端采集层
-- 视频传输: RTMP推流（主） / HTTP分段传输（备用）
+- 视频传输: SRT 推流（推荐） / RTMP 推流（兜底）
 - 视频编码: H.264
 - 参数: 1280×720 @ 15fps
 
@@ -62,13 +63,14 @@
 - 目标跟踪: ByteTrack
 - 异常检测: MOG2背景建模 + 车辆掩膜 + 道路区域约束 + 时序判定
 - 后端框架: Flask / FastAPI / Django
-- 流媒体: FFmpeg / RTMP服务
+- 流媒体: MediaMTX / FFmpeg
 - 数据库: SQLite / MySQL
 
 ### 前端展示层
 - 前端框架: Vue3 / React
 - 数据可视化: ECharts / Canvas / D3.js
 - 实时通信: WebSocket
+- 视频播放: WHEP/WebRTC 优先，HLS 兜底
 - UI组件库: Element UI / Ant Design
 
 ## 核心技术难点
@@ -126,15 +128,16 @@
 
 | 接口 | 协议 | 说明 |
 |------|------|------|
-| **边端 → 云端** | RTMP / HTTP | 视频流传输、设备注册 |
-| **云端 → 前端** | WebSocket / HTTP | 分析结果推送（JSON格式） |
-| **前端 ↔ 云端** | WebSocket | 双向控制信令、场景切换 |
+| **手机 → 腾讯云 MediaMTX** | SRT / RTMP | 原始视频推流 |
+| **腾讯云 MediaMTX → 前端** | WHEP/WebRTC / HLS | 低延迟视频播放，HLS 兜底 |
+| **腾讯云 MediaMTX → 本地 AI** | RTSP | OpenCV 拉流取帧 |
+| **本地 AI 后端 → 前端** | WebSocket / HTTP | 分析结果推送（JSON格式）、场景切换 |
 
 ## 项目结构
 
 ```
 Intelligent-Transportation-System/
-├── edge_member_a/           # 边端注册、心跳、RTMP联调脚本
+├── edge_member_a/           # 设备注册、心跳、云端拉流地址配置
 ├── cloud/                   # 云端AI分析模块
 │   ├── stream_receiver/    # 视频流接收
 │   ├── ai_models/          # AI模型
@@ -148,8 +151,9 @@ Intelligent-Transportation-System/
 │   ├── components/         # 前端组件
 │   ├── utils/              # WebSocket等工具
 │   └── dist/               # 构建产物
-├── deploy/                 # 腾讯云frp公网转发演示配置
-│   └── frp/
+├── deploy/                 # 腾讯云 MediaMTX / frp 演示配置
+│   ├── frp/
+│   └── mediamtx/
 ├── 需求分析文档.md
 ├── 系统设计报告.md
 └── README.md
@@ -164,30 +168,50 @@ Intelligent-Transportation-System/
 - FFmpeg / MediaMTX
 - frp 0.69.x
 
-### 当前演示链路
+### 当前推荐演示链路
 
-本项目当前使用腾讯云轻量服务器做公网中转，本地电脑负责 AI 推理和流媒体服务：
+本项目当前推荐使用腾讯云轻量服务器承载 MediaMTX，本地电脑继续负责后端 API、前端开发服务和 AI 推理：
 
 ```text
-手机/平板 RTMP 推流
-  -> 腾讯云 106.54.10.11:1935
-  -> frp 转发到本地 AI 电脑 127.0.0.1:1935
-  -> MediaMTX 生成 HLS 127.0.0.1:8888
-  -> frp 转发到 http://106.54.10.11:18888/live/mobile_001/index.m3u8
-  -> Vue 前端使用 hls.js 播放
+手机/平板 SRT 推流 App
+  -> 腾讯云 MediaMTX 接收 SRT/RTMP 并输出 WHEP/RTSP/HLS
+  -> Vue 前端优先使用 WebRTC/WHEP 播放
+  -> 本地 AI 电脑从 rtsp://106.54.10.11:8554/live/mobile_001 取帧
 ```
 
-浏览器不能直接播放 RTMP，所以前端播放地址是 HLS 的 `.m3u8`，不是 `rtmp://` 地址。
+RTMP 手机推流 App 容易引入 5 秒以上缓冲，当前推荐改用支持 SRT 的手机推流 App。没有域名时，不再依赖手机浏览器采集摄像头；浏览器前端只负责播放云端 WHEP，不直接播放 `rtmp://` 地址。
 
-### 1. 腾讯云服务器启动 frps
+完整步骤见 [deploy/cloud-mediamtx-demo.md](./deploy/cloud-mediamtx-demo.md)。旧的“云服务器只做 frp 转发、本地运行 MediaMTX”方案仍可参考 [deploy/tencent-frp-demo.md](./deploy/tencent-frp-demo.md)，但低延迟演示优先使用云端 MediaMTX。
+
+### 1. 腾讯云服务器启动 MediaMTX 与 frps
 
 安全组放行：
 
 ```text
 7000
 15000
+15173
 1935
-18888
+8890/UDP
+8888
+8889
+8189/UDP
+8554
+```
+
+MediaMTX 使用 [deploy/mediamtx/cloud-mediamtx.yml](./deploy/mediamtx/cloud-mediamtx.yml)：
+
+```bash
+cd ~/mediamtx
+./mediamtx ./cloud-mediamtx.yml
+```
+
+如果还没有安装 MediaMTX，可以把 [deploy/mediamtx](./deploy/mediamtx) 目录上传到服务器并运行：
+
+```bash
+cd ~/Intelligent-Transportation-System/deploy/mediamtx
+chmod +x ./start-cloud-mediamtx.sh
+PUBLIC_IP=106.54.10.11 ./start-cloud-mediamtx.sh
 ```
 
 进入 frp 服务端目录并启动：
@@ -199,20 +223,19 @@ cd ~/frp_0.69.1_linux_amd64
 
 `frps.toml` 示例见 [deploy/frp/frps.toml](./deploy/frp/frps.toml)。
 
-### 2. 本地 AI 电脑启动 RTMP/HLS 与后端
+### 2. 本地 AI 电脑启动后端与前端
 
-先确保本地有三个服务：
+本地电脑不再启动 MediaMTX，只保留业务服务：
 
 ```text
 后端 API / Socket.IO: 127.0.0.1:5000
-RTMP 接收服务: 127.0.0.1:1935
-HLS 服务: 127.0.0.1:8888
+前端开发服务: 127.0.0.1:5173
 ```
 
-MediaMTX 负责接收手机 RTMP，并生成 HLS。启动后可以用下面命令检查端口：
+启动后可以用下面命令检查端口：
 
 ```powershell
-Get-NetTCPConnection -LocalPort 1935,8888,5000
+Get-NetTCPConnection -LocalPort 5000,5173
 ```
 
 ### 3. 本地 AI 电脑启动 frpc
@@ -227,26 +250,24 @@ Get-NetTCPConnection -LocalPort 1935,8888,5000
 
 ```text
 API:  http://106.54.10.11:15000
-RTMP: rtmp://106.54.10.11:1935/live/mobile_001
-HLS:  http://106.54.10.11:18888/live/mobile_001/index.m3u8
+前端: http://106.54.10.11:15173
 ```
 
 ### 4. 手机或平板推流
 
-在 Larix Broadcaster 或其他 RTMP 推流软件中填写：
+推荐使用支持 SRT 的手机推流 App：
+
+```text
+srt://106.54.10.11:8890?streamid=publish:live/mobile_001&latency=200
+```
+
+如果 App 只支持 RTMP，使用兜底地址：
 
 ```text
 rtmp://106.54.10.11:1935/live/mobile_001
 ```
 
-推荐参数：
-
-```text
-分辨率: 1280x720
-帧率: 10-15fps
-码率: 1-1.5Mbps
-编码: H.264
-```
+手机浏览器需要 HTTPS 才能稳定授权摄像头。若暂时没有 HTTPS，可继续用电脑 FFmpeg 低延迟推流做兜底，或把手机作为电脑摄像头后由电脑推流。
 
 ### 5. 边端注册与心跳
 
@@ -297,20 +318,25 @@ npm run build
 
 ```text
 http://106.54.10.11:15000/api/health
-http://106.54.10.11:18888/live/mobile_001/index.m3u8
+http://106.54.10.11:8889/live/mobile_001/whep
+http://106.54.10.11:8888/live/mobile_001/index.m3u8
+rtsp://106.54.10.11:8554/live/mobile_001
 ```
 
 如果 API 能打开，说明 `5000` 转发正常。
-如果手机开始推流后 HLS 地址能打开，说明 `1935` 和 `8888` 链路正常。
+如果手机开始推流后前端 WebRTC 有画面，说明 `8889` 和 `8189/UDP` 链路正常。
+如果 WebRTC 不通但 HLS 地址能打开，前端会自动回退到 HLS，但延迟会更高。
 
 常见问题：
 
 - `./frps: No such file or directory`：先 `cd ~/frp_0.69.1_linux_amd64`，再运行 `./frps -c frps.toml`。
-- 公网 HLS 返回 `502`：通常是本地 MediaMTX 没启动，或 `frpc` 没连上 `frps`。
-- 前端无画面但手机已推流：先直接打开 HLS 地址确认 `.m3u8` 是否可访问；前端只播放 HLS，不播放 RTMP。
-- `127.0.0.1:1935` 连接拒绝：本地 RTMP 服务未监听，先启动 MediaMTX。
+- 公网 HLS 返回错误：通常是云端 MediaMTX 没启动，或手机还没有推流。
+- 手机浏览器发布页打不开摄像头：检查是否通过 HTTPS 访问；没有域名时建议直接使用 SRT 推流 App，绕过浏览器摄像头 HTTPS 限制。
+- 前端无画面但手机已推流：优先看云端 MediaMTX 日志里是否出现 SRT/RTMP 发布和 WebRTC 读取；再检查 `8189/UDP` 是否放行。
+- `rtsp://106.54.10.11:8554/live/mobile_001` 无法打开：先确认云端 MediaMTX 已启动、手机已推流、`8554/TCP` 已放行。
 
 更完整的腾讯云 frp 演示说明见 [deploy/tencent-frp-demo.md](./deploy/tencent-frp-demo.md)。
+如果要让手机和电脑不在同一网络下使用浏览器摄像头推流，请按 [deploy/https-webrtc-demo.md](./deploy/https-webrtc-demo.md) 配置 HTTPS 入口。
 
 ### 前端依赖
 

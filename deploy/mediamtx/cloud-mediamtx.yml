@@ -1,0 +1,40 @@
+# Cloud MediaMTX configuration for the ITS demo.
+# Run this on the Tencent Cloud server. The server only relays/remuxes media;
+# AI inference stays on the local workstation.
+
+logLevel: info
+
+rtsp: yes
+rtspAddress: :8554
+
+rtmp: yes
+rtmpAddress: :1935
+
+srt: yes
+srtAddress: :8890
+
+hls: yes
+hlsAddress: :8888
+hlsAllowOrigins: ["*"]
+hlsAlwaysRemux: yes
+hlsVariant: lowLatency
+hlsSegmentCount: 7
+hlsSegmentDuration: 1s
+hlsPartDuration: 200ms
+hlsSegmentMaxSize: 50M
+
+webrtc: yes
+webrtcAddress: :8889
+webrtcAllowOrigins: ["*"]
+webrtcAdditionalHosts: [106.54.10.11]
+webrtcLocalUDPAddress: :8189
+webrtcLocalTCPAddress: ""
+
+paths:
+  all:
+    publishUser: ""
+    publishPass: ""
+    publishIPs: []
+    readUser: ""
+    readPass: ""
+    readIPs: []

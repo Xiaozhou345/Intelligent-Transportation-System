@@ -3,6 +3,7 @@ import { computed, ref, reactive, onMounted, onUnmounted } from 'vue'
 import { ElAlert, ElTabPane, ElTabs, ElTag } from 'element-plus'
 import websocketManager from './utils/websocketManager'
 import VideoPlayer from './components/VideoPlayer.vue'
+import CameraPublisher from './components/CameraPublisher.vue'
 import PlateResult from './components/PlateResult.vue'
 import TrafficHeatmap from './components/TrafficHeatmap.vue'
 import IllegalParkingAlarm from './components/IllegalParkingAlarm.vue'
@@ -30,7 +31,10 @@ let clockTimer = null
 const videoPlayerRef = ref(null)
 
 const CLOUD_SERVER_URL = import.meta.env.VITE_CLOUD_SERVER_URL || 'http://106.54.10.11:15000'
-const liveVideoSrc = import.meta.env.VITE_LIVE_VIDEO_URL || 'http://106.54.10.11:18888/live/mobile_001/index.m3u8'
+const liveVideoSrc = import.meta.env.VITE_LIVE_VIDEO_URL || 'http://106.54.10.11:8888/live/mobile_001/index.m3u8'
+const liveWebrtcSrc = import.meta.env.VITE_LIVE_WEBRTC_URL || 'http://106.54.10.11:8889/live/mobile_001/whep'
+const liveWhipSrc = import.meta.env.VITE_LIVE_WHIP_URL || 'http://106.54.10.11:8889/live/mobile_001/whip'
+const isPublisherMode = window.location.pathname === '/publish' || new URLSearchParams(window.location.search).get('mode') === 'publisher'
 
 const latestPlateResult = ref(null)
 const plateRecords = ref([])
@@ -293,6 +297,8 @@ const routeEvent = (data) => {
 }
 
 onMounted(() => {
+  if (isPublisherMode) return
+
   clockTimer = setInterval(() => {
     currentTime.value = new Date()
   }, 1000)
@@ -321,12 +327,16 @@ onUnmounted(() => {
   if (clockTimer) {
     clearInterval(clockTimer)
   }
-  websocketManager.disconnect()
+  if (!isPublisherMode) {
+    websocketManager.disconnect()
+  }
 })
 </script>
 
 <template>
-  <div class="app-container">
+  <CameraPublisher v-if="isPublisherMode" :whip-src="liveWhipSrc" />
+
+  <div v-else class="app-container">
     <header class="header">
       <div class="header-content">
         <div class="brand">
@@ -417,7 +427,7 @@ onUnmounted(() => {
             :devices="deviceList"
             :system-data="systemStatus"
             :server-url="CLOUD_SERVER_URL"
-            :stream-url="liveVideoSrc"
+            :stream-url="liveWebrtcSrc || liveVideoSrc"
             :active-scene-label="activeSceneMeta.label"
             :simulation-mode="websocketManager.isSimulating()"
           />
@@ -440,6 +450,7 @@ onUnmounted(() => {
             <VideoPlayer
               ref="videoPlayerRef"
               :video-src="liveVideoSrc"
+              :webrtc-src="liveWebrtcSrc"
               :analysis-mode="activeSceneMeta.label"
               :model-name="activeSceneMeta.model"
               :detection-count="currentDetectionCount"
