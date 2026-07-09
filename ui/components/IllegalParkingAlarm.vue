@@ -1,6 +1,6 @@
 <script setup>
-import { ref, onMounted, onUnmounted, watch } from 'vue'
-import { ElTable, ElTableColumn, ElTag, ElNotification } from 'element-plus'
+import { ref, watch } from 'vue'
+import { ElButton, ElDialog, ElTable, ElTableColumn, ElTag, ElNotification } from 'element-plus'
 
 const props = defineProps({
   records: {
@@ -12,6 +12,11 @@ const props = defineProps({
 const emit = defineEmits(['new-alarm'])
 
 const displayRecords = ref([])
+const acknowledgedKeys = ref(new Set())
+const showDetailDialog = ref(false)
+const currentAlarm = ref(null)
+
+const getAlarmKey = (row) => `${row.timestamp || ''}-${row.data?.track_id || row.track_id || ''}`
 
 const formatTime = (timestamp) => {
   if (!timestamp) return '-'
@@ -28,15 +33,31 @@ const formatBbox = (bbox) => {
 }
 
 const getStatusText = (status) => {
-  return status === 'warning' ? '告警中' : '已解除'
+  return status === 'acknowledged' ? '已确认' : status === 'warning' ? '告警中' : '已解除'
 }
 
 const getStatusType = (status) => {
+  if (status === 'acknowledged') return 'warning'
   return status === 'warning' ? 'danger' : 'success'
 }
 
 const handleRowClass = ({ row }) => {
-  return row.status === 'warning' ? 'alarm-row-highlight' : ''
+  return getDisplayStatus(row) === 'warning' ? 'alarm-row-highlight' : ''
+}
+
+const getDisplayStatus = (row) => {
+  return acknowledgedKeys.value.has(getAlarmKey(row)) ? 'acknowledged' : row.status
+}
+
+const handleAcknowledge = (row) => {
+  const next = new Set(acknowledgedKeys.value)
+  next.add(getAlarmKey(row))
+  acknowledgedKeys.value = next
+}
+
+const handleViewDetail = (row) => {
+  currentAlarm.value = row
+  showDetailDialog.value = true
 }
 
 watch(() => props.records, (newRecords) => {
@@ -91,30 +112,66 @@ watch(() => props.records.length, (newLen, oldLen) => {
       </ElTableColumn>
       <ElTableColumn label="状态" width="80" align="center">
         <template #default="{ row }">
-          <ElTag :type="getStatusType(row.status)" size="small">
-            {{ getStatusText(row.status) }}
+          <ElTag :type="getStatusType(getDisplayStatus(row))" size="small">
+            {{ getStatusText(getDisplayStatus(row)) }}
           </ElTag>
+        </template>
+      </ElTableColumn>
+      <ElTableColumn label="操作" width="120" align="center">
+        <template #default="{ row }">
+          <ElButton type="primary" link size="small" @click="handleViewDetail(row)">详情</ElButton>
+          <ElButton
+            v-if="getDisplayStatus(row) === 'warning'"
+            type="warning"
+            link
+            size="small"
+            @click="handleAcknowledge(row)"
+          >
+            确认
+          </ElButton>
         </template>
       </ElTableColumn>
     </ElTable>
     <div v-if="displayRecords.length === 0" class="empty-tip">
       暂无违停告警记录
     </div>
+
+    <ElDialog title="违停告警详情" v-model="showDetailDialog" width="460px">
+      <div v-if="currentAlarm" class="alarm-detail">
+        <div><span>车辆ID</span><strong>{{ currentAlarm.data?.track_id || currentAlarm.track_id || '-' }}</strong></div>
+        <div><span>告警时间</span><strong>{{ formatTime(currentAlarm.timestamp) }}</strong></div>
+        <div><span>停留时长</span><strong>{{ Math.round(currentAlarm.data?.stay_time || 0) }} 秒</strong></div>
+        <div><span>预设阈值</span><strong>{{ currentAlarm.data?.threshold || 30 }} 秒</strong></div>
+        <div><span>目标位置</span><strong>{{ formatBbox(currentAlarm.bbox) }}</strong></div>
+        <div><span>处置状态</span><strong>{{ getStatusText(getDisplayStatus(currentAlarm)) }}</strong></div>
+      </div>
+      <template #footer>
+        <ElButton @click="showDetailDialog = false">关闭</ElButton>
+        <ElButton
+          v-if="currentAlarm && getDisplayStatus(currentAlarm) === 'warning'"
+          type="primary"
+          @click="handleAcknowledge(currentAlarm); showDetailDialog = false"
+        >
+          确认告警
+        </ElButton>
+      </template>
+    </ElDialog>
   </div>
 </template>
 
 <style scoped>
 .illegal-parking-alarm {
-  background: white;
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.9), rgba(8, 18, 33, 0.92));
+  border: 1px solid rgba(56, 189, 248, 0.22);
   border-radius: 8px;
   padding: 16px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 18px 38px rgba(2, 8, 23, 0.36), inset 0 1px 0 rgba(255, 255, 255, 0.05);
   margin-top: 16px;
 }
 
 .illegal-parking-alarm h3 {
   font-size: 16px;
-  color: #303133;
+  color: #e0f2fe;
   margin-bottom: 12px;
 }
 
@@ -128,8 +185,33 @@ watch(() => props.records.length, (newLen, oldLen) => {
 
 .empty-tip {
   text-align: center;
-  color: #909399;
+  color: #93c5fd;
   padding: 20px;
+  font-size: 14px;
+}
+
+.alarm-detail {
+  display: grid;
+  gap: 10px;
+}
+
+.alarm-detail div {
+  align-items: center;
+  background: rgba(15, 23, 42, 0.72);
+  border: 1px solid rgba(56, 189, 248, 0.14);
+  border-radius: 8px;
+  display: flex;
+  justify-content: space-between;
+  padding: 10px 12px;
+}
+
+.alarm-detail span {
+  color: #93c5fd;
+  font-size: 13px;
+}
+
+.alarm-detail strong {
+  color: #e0f2fe;
   font-size: 14px;
 }
 </style>

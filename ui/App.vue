@@ -1,6 +1,6 @@
 <script setup>
-import { ref, reactive, onMounted, onUnmounted } from 'vue'
-import { ElTag, ElAlert } from 'element-plus'
+import { computed, ref, reactive, onMounted, onUnmounted } from 'vue'
+import { ElAlert, ElTabPane, ElTabs, ElTag } from 'element-plus'
 import websocketManager from './utils/websocketManager'
 import VideoPlayer from './components/VideoPlayer.vue'
 import PlateResult from './components/PlateResult.vue'
@@ -12,16 +12,25 @@ import SystemMonitor from './components/SystemMonitor.vue'
 import DeviceManager from './components/DeviceManager.vue'
 import ConfigPanel from './components/ConfigPanel.vue'
 import DashboardStats from './components/DashboardStats.vue'
+import CloudEdgeStatus from './components/CloudEdgeStatus.vue'
+import EventStream from './components/EventStream.vue'
+import HistoryQuery from './components/HistoryQuery.vue'
+import WhitelistManager from './components/WhitelistManager.vue'
 
 const connectionStatus = ref('未连接')
 const reconnectCount = ref(0)
 const showError = ref(false)
 const errorMessage = ref('')
+const activeScene = ref('vehicle_detection')
+const eventRecords = ref([])
+const latestLatency = ref(0)
+const currentTime = ref(new Date())
+let clockTimer = null
 
 const videoPlayerRef = ref(null)
 
-const CLOUD_SERVER_URL = import.meta.env.VITE_CLOUD_SERVER_URL || 'http://172.20.10.2:5000'
-const liveVideoSrc = import.meta.env.VITE_LIVE_VIDEO_URL || 'http://172.20.10.2:8888/live/mobile_001/index.m3u8'
+const CLOUD_SERVER_URL = import.meta.env.VITE_CLOUD_SERVER_URL || 'http://106.54.10.11:15000'
+const liveVideoSrc = import.meta.env.VITE_LIVE_VIDEO_URL || 'http://106.54.10.11:18888/live/mobile_001/index.m3u8'
 
 const latestPlateResult = ref(null)
 const plateRecords = ref([])
@@ -35,9 +44,7 @@ const trafficDensityData = ref([
 ])
 
 const illegalParkingRecords = ref([])
-
 const roadAnomalyRecords = ref([])
-
 const systemStatus = ref({})
 
 const dashboardStats = reactive({
@@ -71,20 +78,113 @@ const deviceList = ref([
   }
 ])
 
+const sceneTabs = [
+  { label: '车辆检测', value: 'vehicle_detection', model: 'YOLOv11s' },
+  { label: '车牌识别', value: 'plate_recognition', model: 'PlateOCR-v2' },
+  { label: '拥堵热力', value: 'traffic_density', model: 'DensityMap' },
+  { label: '违停检测', value: 'illegal_parking', model: 'Tracker + Rule' },
+  { label: '道路异常', value: 'road_anomaly', model: 'AnomalyNet' }
+]
+
 const statusMap = {
   disconnected: '未连接',
   connecting: '连接中',
   connected: '已连接',
   reconnecting: '重连中',
-  error: '连接失败'
+  error: '连接失败',
+  simulating: '演示模式'
 }
 
 const statusTypeMap = {
-  disconnected: 'danger',
-  connecting: 'warning',
-  connected: 'success',
-  reconnecting: 'warning',
-  error: 'danger'
+  未连接: 'danger',
+  连接中: 'warning',
+  已连接: 'success',
+  重连中: 'warning',
+  连接失败: 'danger',
+  演示模式: 'warning'
+}
+
+const activeSceneMeta = computed(() => {
+  return sceneTabs.find(scene => scene.value === activeScene.value) || sceneTabs[0]
+})
+
+const onlineDeviceCount = computed(() => deviceList.value.filter(device => device.status === 'online').length)
+const activeAlarmCount = computed(() => {
+  const illegalCount = illegalParkingRecords.value.filter(record => record.status === 'warning').length
+  const anomalyCount = roadAnomalyRecords.value.filter(record => record.status === 'warning').length
+  return illegalCount + anomalyCount
+})
+
+const latestEventTime = computed(() => {
+  const event = eventRecords.value[0]
+  if (!event?.timestamp) return '等待事件'
+  const date = new Date(event.timestamp)
+  if (Number.isNaN(date.getTime())) return '刚刚'
+  return date.toLocaleTimeString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  })
+})
+
+const connectionQuality = computed(() => {
+  if (connectionStatus.value === '已连接') return { text: '稳定', className: 'quality-good' }
+  if (connectionStatus.value === '演示模式') return { text: '演示', className: 'quality-demo' }
+  if (connectionStatus.value === '连接中' || connectionStatus.value === '重连中') return { text: '波动', className: 'quality-warn' }
+  return { text: '中断', className: 'quality-bad' }
+})
+
+const formattedCurrentTime = computed(() => {
+  return currentTime.value.toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  })
+})
+
+const streamStatusText = computed(() => {
+  if (systemStatus.value.stream_status === 'streaming') return '拉流中'
+  if (systemStatus.value.stream_status === 'disconnected') return '已断开'
+  if (connectionStatus.value === '演示模式') return '演示流'
+  return connectionStatus.value
+})
+
+const currentDetectionCount = computed(() => {
+  if (activeScene.value === 'vehicle_detection') return vehicleDetectionRecords.value.length
+  if (activeScene.value === 'plate_recognition') return plateRecords.value.length
+  if (activeScene.value === 'illegal_parking') return illegalParkingRecords.value.length
+  if (activeScene.value === 'road_anomaly') return roadAnomalyRecords.value.length
+  return trafficDensityData.value.reduce((sum, item) => sum + (item.vehicle_count || 0), 0)
+})
+
+const addEventRecord = (event) => {
+  const normalized = {
+    id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    timestamp: event.timestamp || new Date().toISOString(),
+    status: event.status || 'normal',
+    ...event
+  }
+  eventRecords.value.unshift(normalized)
+  if (eventRecords.value.length > 200) {
+    eventRecords.value = eventRecords.value.slice(0, 200)
+  }
+}
+
+const updateLatency = (timestamp) => {
+  const eventTime = timestamp ? new Date(timestamp).getTime() : Date.now()
+  latestLatency.value = Number.isNaN(eventTime)
+    ? Math.round(60 + Math.random() * 80)
+    : Math.max(0, Math.min(999, Date.now() - eventTime))
+}
+
+const handleSceneChange = (scene) => {
+  activeScene.value = scene
+  handleSendCommand({
+    command: 'switch_scene',
+    scene_id: scene
+  })
 }
 
 const handlePlateRecognition = (data) => {
@@ -105,8 +205,8 @@ const buildVehicleBoxes = (records) => {
       y1: record.bbox[1],
       x2: record.bbox[2],
       y2: record.bbox[3],
-      label: `${record.data?.vehicle_type || 'vehicle'} ${Math.round((record.data?.confidence || 0) * 100)}%`,
-      color: index === 0 ? '#ff4d4f' : '#faad14'
+      label: `${record.data?.vehicle_type || record.data?.plate_number || 'vehicle'} ${Math.round((record.data?.confidence || 0.86) * 100)}%`,
+      color: index === 0 ? '#ef4444' : '#f59e0b'
     }))
 }
 
@@ -164,24 +264,42 @@ const handleDeviceAdd = (device) => {
 
 const handleSendCommand = (command) => {
   websocketManager.send(command)
+  addEventRecord({
+    event_type: 'client_command',
+    command: command.command || 'command',
+    data: command,
+    device_id: 'frontend_console',
+    status: 'normal'
+  })
+}
+
+const routeEvent = (data) => {
+  updateLatency(data.timestamp)
+  addEventRecord(data)
+
+  if (data.event_type === 'vehicle_detection') {
+    handleVehicleDetection(data)
+  } else if (data.event_type === 'plate_recognition') {
+    handlePlateRecognition(data)
+  } else if (data.event_type === 'traffic_density') {
+    handleTrafficDensity(data)
+  } else if (data.event_type === 'illegal_parking') {
+    handleIllegalParking(data)
+  } else if (data.event_type === 'road_anomaly') {
+    handleRoadAnomaly(data)
+  } else if (data.event_type === 'system_status') {
+    handleSystemStatus(data)
+  }
 }
 
 onMounted(() => {
+  clockTimer = setInterval(() => {
+    currentTime.value = new Date()
+  }, 1000)
+
   websocketManager.onMessage((data) => {
     console.log('WebSocket 消息:', data)
-    if (data.event_type === 'vehicle_detection') {
-      handleVehicleDetection(data)
-    } else if (data.event_type === 'plate_recognition') {
-      handlePlateRecognition(data)
-    } else if (data.event_type === 'traffic_density') {
-      handleTrafficDensity(data)
-    } else if (data.event_type === 'illegal_parking') {
-      handleIllegalParking(data)
-    } else if (data.event_type === 'road_anomaly') {
-      handleRoadAnomaly(data)
-    } else if (data.event_type === 'system_status') {
-      handleSystemStatus(data)
-    }
+    routeEvent(data)
   })
 
   websocketManager.onStatusChange((status, count) => {
@@ -191,7 +309,7 @@ onMounted(() => {
     if (status === 'disconnected' && count >= 10) {
       showError.value = true
       errorMessage.value = 'WebSocket 连接失败，已达到最大重试次数'
-    } else if (status === 'connected') {
+    } else if (status === 'connected' || status === 'simulating') {
       showError.value = false
     }
   })
@@ -200,6 +318,9 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  if (clockTimer) {
+    clearInterval(clockTimer)
+  }
   websocketManager.disconnect()
 })
 </script>
@@ -208,11 +329,21 @@ onUnmounted(() => {
   <div class="app-container">
     <header class="header">
       <div class="header-content">
-        <h1>交通监控系统</h1>
+        <div class="brand">
+          <div class="brand-mark">ITS</div>
+          <div>
+            <h1>智慧交通视觉感知系统</h1>
+            <p>Cloud Edge Vision Command Center</p>
+          </div>
+        </div>
         <div class="header-right">
+          <div class="time-block">
+            <span>系统时间</span>
+            <strong>{{ formattedCurrentTime }}</strong>
+          </div>
           <div class="status-container">
-            <span class="status-label">连接状态：</span>
-            <ElTag :type="statusTypeMap[connectionStatus === '已连接' ? 'connected' : connectionStatus === '重连中' ? 'reconnecting' : connectionStatus === '连接中' ? 'connecting' : 'disconnected']" size="large">
+            <span class="status-label">连接状态</span>
+            <ElTag :type="statusTypeMap[connectionStatus]" size="large">
               {{ connectionStatus }}
               <span v-if="connectionStatus === '重连中'" class="reconnect-count">
                 ({{ reconnectCount }}/{{ websocketManager.maxReconnectAttempts }})
@@ -234,35 +365,114 @@ onUnmounted(() => {
         :closable="false"
       />
 
-      <div class="content-grid">
-        <div class="video-section">
-          <h2>视频监控</h2>
-          <VideoPlayer ref="videoPlayerRef" :video-src="liveVideoSrc" />
+      <section class="scene-tabs-panel">
+        <ElTabs v-model="activeScene" class="scene-tabs" @tab-change="handleSceneChange">
+          <ElTabPane v-for="scene in sceneTabs" :key="scene.value" :label="scene.label" :name="scene.value" />
+        </ElTabs>
+        <div class="scene-meta">
+          <span>当前模型：{{ activeSceneMeta.model }}</span>
+          <span>检测结果：{{ currentDetectionCount }}</span>
+          <span>模式：{{ websocketManager.isSimulating() ? '演示数据' : '真实接入' }}</span>
         </div>
+      </section>
 
-        <div class="plate-section">
+      <section class="overview-strip" aria-label="系统运行总览">
+        <div class="overview-card">
+          <span>在线设备</span>
+          <strong>{{ onlineDeviceCount }}/{{ deviceList.length }}</strong>
+          <em>边端采集节点</em>
+        </div>
+        <div class="overview-card">
+          <span>当前告警</span>
+          <strong :class="{ danger: activeAlarmCount > 0 }">{{ activeAlarmCount }}</strong>
+          <em>违停 / 道路异常</em>
+        </div>
+        <div class="overview-card">
+          <span>传输延迟</span>
+          <strong>{{ latestLatency }}ms</strong>
+          <em>{{ connectionQuality.text }}</em>
+        </div>
+        <div class="overview-card">
+          <span>事件总量</span>
+          <strong>{{ eventRecords.length }}</strong>
+          <em>最新 {{ latestEventTime }}</em>
+        </div>
+        <div class="overview-card">
+          <span>通行识别</span>
+          <strong>{{ dashboardStats.plateCount }}</strong>
+          <em>车牌比对结果</em>
+        </div>
+        <div class="overview-card">
+          <span>拥堵指数</span>
+          <strong>{{ dashboardStats.congestionIndex }}</strong>
+          <em>0-100 综合评分</em>
+        </div>
+      </section>
+
+      <section class="command-grid">
+        <aside class="left-rail">
+          <CloudEdgeStatus
+            :connection-status="connectionStatus"
+            :reconnect-count="reconnectCount"
+            :devices="deviceList"
+            :system-data="systemStatus"
+            :server-url="CLOUD_SERVER_URL"
+            :stream-url="liveVideoSrc"
+            :active-scene-label="activeSceneMeta.label"
+            :simulation-mode="websocketManager.isSimulating()"
+          />
           <SystemMonitor :system-data="systemStatus" />
-          <VehicleDetectionPanel :records="vehicleDetectionRecords" />
+          <DeviceManager :devices="deviceList" @add-device="handleDeviceAdd" />
+        </aside>
+
+        <section class="center-stage">
+          <div class="video-section">
+            <div class="panel-title">
+              <div>
+                <h2>实时视频分析</h2>
+                <p>检测框、告警区域、识别结果与事件流同步展示</p>
+              </div>
+              <div class="video-title-actions">
+                <span :class="['quality-dot', connectionQuality.className]"></span>
+                <ElTag type="success">{{ streamStatusText }}</ElTag>
+              </div>
+            </div>
+            <VideoPlayer
+              ref="videoPlayerRef"
+              :video-src="liveVideoSrc"
+              :analysis-mode="activeSceneMeta.label"
+              :model-name="activeSceneMeta.model"
+              :detection-count="currentDetectionCount"
+              :latency="latestLatency"
+              :stream-status="streamStatusText"
+            />
+          </div>
+
+          <TrafficHeatmap v-if="activeScene === 'traffic_density'" :data="trafficDensityData" />
+          <VehicleDetectionPanel v-else-if="activeScene === 'vehicle_detection'" :records="vehicleDetectionRecords" />
+          <PlateResult
+            v-else-if="activeScene === 'plate_recognition'"
+            :latest-result="latestPlateResult"
+            :records="plateRecords"
+          />
+          <IllegalParkingAlarm v-else-if="activeScene === 'illegal_parking'" :records="illegalParkingRecords" />
+          <RoadAnomalyAlarm v-else-if="activeScene === 'road_anomaly'" :records="roadAnomalyRecords" />
+        </section>
+
+        <aside class="right-rail">
+          <EventStream :events="eventRecords" />
           <PlateResult :latest-result="latestPlateResult" :records="plateRecords" />
           <IllegalParkingAlarm :records="illegalParkingRecords" />
           <RoadAnomalyAlarm :records="roadAnomalyRecords" />
-          <DeviceManager :devices="deviceList" @add-device="handleDeviceAdd" />
-        </div>
-      </div>
+        </aside>
+      </section>
 
       <DashboardStats :stats-data="dashboardStats" />
 
-      <div class="heatmap-section">
-        <TrafficHeatmap :data="trafficDensityData" />
-      </div>
-
-      <div class="message-area">
-        <h2>控制台日志</h2>
-        <div class="log-tip">
-          <p>WebSocket 消息将在浏览器控制台中打印。</p>
-          <p>按 F12 打开开发者工具查看。</p>
-        </div>
-      </div>
+      <section class="bottom-grid">
+        <HistoryQuery :events="eventRecords" />
+        <WhitelistManager @send-command="handleSendCommand" />
+      </section>
     </main>
   </div>
 </template>
@@ -270,108 +480,460 @@ onUnmounted(() => {
 <style scoped>
 .app-container {
   min-height: 100vh;
-  background-color: #f5f7fa;
+  background:
+    radial-gradient(circle at 16% 12%, rgba(14, 165, 233, 0.2), transparent 28%),
+    radial-gradient(circle at 82% 8%, rgba(20, 184, 166, 0.16), transparent 26%),
+    linear-gradient(180deg, #07111f 0%, #0b1728 48%, #08111f 100%);
+  color: #dbeafe;
+  position: relative;
+}
+
+.app-container::before {
+  content: '';
+  inset: 0;
+  pointer-events: none;
+  position: fixed;
+  background-image:
+    linear-gradient(rgba(148, 163, 184, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, 0.06) 1px, transparent 1px);
+  background-size: 32px 32px;
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.9), transparent 78%);
+  z-index: 0;
 }
 
 .header {
-  background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
-  color: white;
-  padding: 16px 24px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  background: rgba(7, 17, 31, 0.86);
+  border-bottom: 1px solid rgba(34, 211, 238, 0.22);
+  color: #ffffff;
+  padding: 14px 24px;
+  box-shadow: 0 12px 34px rgba(2, 8, 23, 0.42);
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  backdrop-filter: blur(18px);
 }
 
 .header-content {
+  align-items: center;
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  max-width: 1400px;
   margin: 0 auto;
+  max-width: 1680px;
 }
 
-.header h1 {
-  font-size: 24px;
-  font-weight: 600;
+.brand {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+}
+
+.brand-mark {
+  align-items: center;
+  background: linear-gradient(135deg, #06b6d4, #2563eb);
+  border-radius: 8px;
+  box-shadow: 0 0 22px rgba(34, 211, 238, 0.45);
+  display: flex;
+  font-size: 15px;
+  font-weight: 800;
+  height: 44px;
+  justify-content: center;
+  letter-spacing: 0;
+  width: 44px;
+}
+
+.brand h1 {
+  color: #f8fafc;
+  font-size: 22px;
+  font-weight: 700;
+  text-shadow: 0 0 18px rgba(125, 211, 252, 0.22);
+}
+
+.brand p {
+  color: #93c5fd;
+  font-size: 12px;
+  margin-top: 2px;
 }
 
 .header-right {
-  display: flex;
   align-items: center;
+  display: flex;
   gap: 16px;
 }
 
+.time-block {
+  border-right: 1px solid rgba(125, 211, 252, 0.18);
+  display: grid;
+  gap: 3px;
+  padding-right: 16px;
+  text-align: right;
+}
+
+.time-block span {
+  color: #7dd3fc;
+  font-size: 11px;
+}
+
+.time-block strong {
+  color: #e0f2fe;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
 .status-container {
-  display: flex;
   align-items: center;
+  display: flex;
   gap: 8px;
 }
 
 .status-label {
-  font-size: 14px;
+  color: #93c5fd;
+  font-size: 13px;
 }
 
 .reconnect-count {
-  margin-left: 4px;
   font-size: 12px;
+  margin-left: 4px;
 }
 
 .main-content {
-  max-width: 1400px;
-  margin: 24px auto;
-  padding: 0 24px;
+  margin: 18px auto;
+  max-width: 1680px;
+  padding: 0 20px 24px;
+  position: relative;
+  z-index: 1;
 }
 
-.content-grid {
+.scene-tabs-panel {
+  align-items: center;
+  background: linear-gradient(135deg, rgba(15, 23, 42, 0.92), rgba(15, 36, 62, 0.82));
+  border: 1px solid rgba(56, 189, 248, 0.28);
+  border-radius: 8px;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  padding: 0 16px;
+  box-shadow: 0 18px 40px rgba(2, 8, 23, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(14px);
+}
+
+.scene-tabs {
+  flex: 1;
+  min-width: 0;
+}
+
+.scene-meta {
+  align-items: center;
+  color: #bae6fd;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 13px;
+  gap: 12px;
+  justify-content: flex-end;
+  padding-left: 16px;
+}
+
+.overview-strip {
   display: grid;
-  grid-template-columns: 1fr 420px;
-  gap: 24px;
-  margin-top: 16px;
+  gap: 12px;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  margin-bottom: 16px;
+}
+
+.overview-card {
+  background:
+    linear-gradient(135deg, rgba(8, 145, 178, 0.16), rgba(15, 23, 42, 0.72)),
+    rgba(15, 23, 42, 0.7);
+  border: 1px solid rgba(56, 189, 248, 0.2);
+  border-radius: 8px;
+  min-width: 0;
+  overflow: hidden;
+  padding: 13px 14px;
+  position: relative;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 12px 26px rgba(2, 8, 23, 0.22);
+}
+
+.overview-card::after {
+  background: linear-gradient(180deg, rgba(34, 211, 238, 0.9), transparent);
+  content: '';
+  height: 44px;
+  position: absolute;
+  right: 0;
+  top: 0;
+  width: 2px;
+}
+
+.overview-card span {
+  color: #93c5fd;
+  display: block;
+  font-size: 12px;
+}
+
+.overview-card strong {
+  color: #e0f2fe;
+  display: block;
+  font-size: 25px;
+  font-weight: 800;
+  line-height: 1.1;
+  margin-top: 6px;
+}
+
+.overview-card strong.danger {
+  color: #fca5a5;
+  text-shadow: 0 0 14px rgba(239, 68, 68, 0.42);
+}
+
+.overview-card em {
+  color: #7dd3fc;
+  display: block;
+  font-size: 11px;
+  font-style: normal;
+  margin-top: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: 360px minmax(0, 1fr) 390px;
+  align-items: start;
+}
+
+.left-rail,
+.right-rail,
+.center-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
 }
 
 .video-section {
-  background: white;
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.94), rgba(8, 18, 33, 0.94));
+  border: 1px solid rgba(56, 189, 248, 0.28);
   border-radius: 8px;
-  padding: 24px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  padding: 16px;
+  box-shadow: 0 20px 48px rgba(2, 8, 23, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
-.video-section h2 {
-  font-size: 18px;
-  color: #303133;
-  margin-bottom: 16px;
-}
-
-.plate-section {
+.panel-title {
+  align-items: center;
   display: flex;
-  flex-direction: column;
+  justify-content: space-between;
+  margin-bottom: 14px;
 }
 
-@media (max-width: 1200px) {
-  .content-grid {
-    grid-template-columns: 1fr;
+.video-title-actions {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
+
+.quality-dot {
+  border-radius: 50%;
+  height: 10px;
+  width: 10px;
+}
+
+.quality-good {
+  background: #22c55e;
+  box-shadow: 0 0 14px rgba(34, 197, 94, 0.7);
+}
+
+.quality-demo {
+  background: #38bdf8;
+  box-shadow: 0 0 14px rgba(56, 189, 248, 0.7);
+}
+
+.quality-warn {
+  background: #f59e0b;
+  box-shadow: 0 0 14px rgba(245, 158, 11, 0.7);
+}
+
+.quality-bad {
+  background: #ef4444;
+  box-shadow: 0 0 14px rgba(239, 68, 68, 0.7);
+}
+
+.panel-title h2 {
+  color: #e0f2fe;
+  font-size: 18px;
+}
+
+.panel-title p {
+  color: #7dd3fc;
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+:deep(.el-tabs__item) {
+  color: #93c5fd;
+  font-weight: 600;
+}
+
+:deep(.el-tabs__item.is-active) {
+  color: #67e8f9;
+  text-shadow: 0 0 16px rgba(34, 211, 238, 0.52);
+}
+
+:deep(.el-tabs__active-bar) {
+  background: linear-gradient(90deg, #22d3ee, #60a5fa);
+  box-shadow: 0 0 16px rgba(34, 211, 238, 0.66);
+}
+
+:deep(.el-tabs__nav-wrap::after) {
+  background-color: rgba(56, 189, 248, 0.18);
+}
+
+:deep(.el-tag) {
+  border-radius: 6px;
+}
+
+:deep(.cloud-edge-status),
+:deep(.system-monitor),
+:deep(.device-manager),
+:deep(.event-stream),
+:deep(.plate-result-container .el-card),
+:deep(.illegal-parking-alarm),
+:deep(.road-anomaly-alarm),
+:deep(.vehicle-detection-panel),
+:deep(.traffic-heatmap-container),
+:deep(.dashboard-stats),
+:deep(.history-query),
+:deep(.whitelist-manager) {
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.9), rgba(8, 18, 33, 0.92));
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  box-shadow: 0 18px 38px rgba(2, 8, 23, 0.36), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  color: #dbeafe;
+}
+
+:deep(.system-monitor h3),
+:deep(.device-manager h3),
+:deep(.event-stream h2),
+:deep(.traffic-heatmap-container h2),
+:deep(.dashboard-stats h3),
+:deep(.history-query h2),
+:deep(.whitelist-manager h2),
+:deep(.vehicle-detection-panel h3),
+:deep(.illegal-parking-alarm h3),
+:deep(.road-anomaly-alarm h3),
+:deep(.el-card__header) {
+  color: #e0f2fe;
+}
+
+:deep(.el-card) {
+  background: transparent;
+  border-color: rgba(56, 189, 248, 0.2);
+  color: #dbeafe;
+}
+
+:deep(.el-card__header) {
+  border-bottom-color: rgba(56, 189, 248, 0.18);
+}
+
+:deep(.el-table) {
+  --el-table-bg-color: transparent;
+  --el-table-tr-bg-color: transparent;
+  --el-table-header-bg-color: rgba(14, 165, 233, 0.12);
+  --el-table-row-hover-bg-color: rgba(14, 165, 233, 0.12);
+  --el-table-border-color: rgba(56, 189, 248, 0.14);
+  --el-table-text-color: #dbeafe;
+  --el-table-header-text-color: #93c5fd;
+  background: transparent;
+  color: #dbeafe;
+}
+
+:deep(.el-table th.el-table__cell),
+:deep(.el-table tr),
+:deep(.el-table td.el-table__cell) {
+  background: transparent;
+}
+
+:deep(.el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell) {
+  background: rgba(15, 23, 42, 0.38);
+}
+
+:deep(.el-dialog) {
+  background: #0f172a;
+  border: 1px solid rgba(56, 189, 248, 0.28);
+  border-radius: 8px;
+  box-shadow: 0 26px 70px rgba(2, 8, 23, 0.72);
+}
+
+:deep(.el-dialog__title),
+:deep(.el-form-item__label) {
+  color: #e0f2fe;
+}
+
+:deep(.el-input__wrapper),
+:deep(.el-select__wrapper),
+:deep(.el-input-number__wrapper) {
+  background: rgba(15, 23, 42, 0.86);
+  border: 1px solid rgba(56, 189, 248, 0.18);
+  box-shadow: none;
+}
+
+:deep(.el-input__inner),
+:deep(.el-select__placeholder) {
+  color: #dbeafe;
+}
+
+.bottom-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(0, 1.4fr) minmax(360px, 0.6fr);
+  margin-top: 16px;
+}
+
+@media (max-width: 1480px) {
+  .overview-strip {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .command-grid {
+    grid-template-columns: 330px minmax(0, 1fr);
+  }
+
+  .right-rail {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
-.heatmap-section {
-  margin-top: 16px;
+@media (max-width: 1100px) {
+  .header-content,
+  .scene-tabs-panel {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .command-grid,
+  .overview-strip,
+  .bottom-grid,
+  .right-rail {
+    grid-template-columns: 1fr;
+  }
+
+  .scene-meta {
+    justify-content: flex-start;
+    padding: 0 0 12px;
+  }
 }
 
-.message-area {
-  background: white;
-  border-radius: 8px;
-  padding: 24px;
-  margin-top: 16px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-}
+@media (max-width: 720px) {
+  .header,
+  .main-content {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
 
-.message-area h2 {
-  font-size: 18px;
-  color: #303133;
-  margin-bottom: 16px;
-}
-
-.log-tip {
-  color: #909399;
-  font-size: 14px;
-  line-height: 1.8;
+  .header-right {
+    align-items: flex-start;
+    flex-direction: column;
+  }
 }
 </style>

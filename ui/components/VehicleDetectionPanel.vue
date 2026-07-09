@@ -94,22 +94,23 @@ watch(() => props.records.length, (newLen, oldLen) => {
 
 <style scoped>
 .vehicle-detection-panel {
-  background: white;
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.9), rgba(8, 18, 33, 0.92));
+  border: 1px solid rgba(56, 189, 248, 0.22);
   border-radius: 8px;
   padding: 16px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 18px 38px rgba(2, 8, 23, 0.36), inset 0 1px 0 rgba(255, 255, 255, 0.05);
   margin-top: 16px;
 }
 
 .vehicle-detection-panel h3 {
   font-size: 16px;
-  color: #303133;
+  color: #e0f2fe;
   margin-bottom: 12px;
 }
 
 .empty-tip {
   text-align: center;
-  color: #909399;
+  color: #93c5fd;
   padding: 20px;
   font-size: 14px;
 }

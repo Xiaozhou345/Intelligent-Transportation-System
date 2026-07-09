@@ -90,7 +90,18 @@ const updateTrendChart = () => {
     xAxis: {
       type: 'category',
       data: trendData.value.timeLabels,
+      axisLine: {
+        lineStyle: {
+          color: 'rgba(125, 211, 252, 0.35)'
+        }
+      },
+      axisTick: {
+        lineStyle: {
+          color: 'rgba(125, 211, 252, 0.28)'
+        }
+      },
       axisLabel: {
+        color: '#93c5fd',
         fontSize: 11,
         rotate: 30
       }
@@ -99,7 +110,18 @@ const updateTrendChart = () => {
       type: 'value',
       min: 0,
       max: 100,
+      splitLine: {
+        lineStyle: {
+          color: 'rgba(56, 189, 248, 0.12)'
+        }
+      },
+      axisLine: {
+        lineStyle: {
+          color: 'rgba(125, 211, 252, 0.35)'
+        }
+      },
       axisLabel: {
+        color: '#93c5fd',
         formatter: '{value}'
       }
     },
@@ -109,16 +131,16 @@ const updateTrendChart = () => {
       smooth: true,
       data: trendData.value.values,
       lineStyle: {
-        width: 2,
-        color: '#1e3c72'
+        width: 3,
+        color: '#22d3ee'
       },
       itemStyle: {
-        color: '#2a5298'
+        color: '#67e8f9'
       },
       areaStyle: {
         color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-          { offset: 0, color: 'rgba(42, 82, 152, 0.4)' },
-          { offset: 1, color: 'rgba(42, 82, 152, 0.05)' }
+          { offset: 0, color: 'rgba(34, 211, 238, 0.35)' },
+          { offset: 1, color: 'rgba(34, 211, 238, 0.03)' }
         ])
       }
     }]
@@ -144,7 +166,10 @@ const updateDistributionChart = () => {
     },
     legend: {
       data: ['违规停车', '道路异常'],
-      top: 0
+      top: 0,
+      textStyle: {
+        color: '#bae6fd'
+      }
     },
     grid: {
       left: '3%',
@@ -156,13 +181,25 @@ const updateDistributionChart = () => {
     xAxis: {
       type: 'category',
       data: distributionData.value.roads,
+      axisLine: {
+        lineStyle: {
+          color: 'rgba(125, 211, 252, 0.35)'
+        }
+      },
       axisLabel: {
+        color: '#93c5fd',
         fontSize: 12
       }
     },
     yAxis: {
       type: 'value',
+      splitLine: {
+        lineStyle: {
+          color: 'rgba(56, 189, 248, 0.12)'
+        }
+      },
       axisLabel: {
+        color: '#93c5fd',
         formatter: '{value}次'
       }
     },
@@ -172,7 +209,7 @@ const updateDistributionChart = () => {
         type: 'bar',
         data: distributionData.value.illegalParking,
         itemStyle: {
-          color: '#faad14',
+          color: '#f59e0b',
           borderRadius: [4, 4, 0, 0]
         }
       },
@@ -181,7 +218,7 @@ const updateDistributionChart = () => {
         type: 'bar',
         data: distributionData.value.roadAnomaly,
         itemStyle: {
-          color: '#f5222d',
+          color: '#ef4444',
           borderRadius: [4, 4, 0, 0]
         }
       }
@@ -311,22 +348,23 @@ export default {
 
 <style scoped>
 .dashboard-stats {
-  background: white;
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.9), rgba(8, 18, 33, 0.92));
+  border: 1px solid rgba(56, 189, 248, 0.22);
   border-radius: 8px;
   padding: 16px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 18px 38px rgba(2, 8, 23, 0.36), inset 0 1px 0 rgba(255, 255, 255, 0.05);
   margin-top: 16px;
 }
 
 .dashboard-stats h3 {
   font-size: 16px;
-  color: #303133;
+  color: #e0f2fe;
   margin-bottom: 16px;
 }
 
 .dashboard-stats h4 {
   font-size: 14px;
-  color: #606266;
+  color: #93c5fd;
   margin-bottom: 12px;
   font-weight: 500;
 }
@@ -343,7 +381,8 @@ export default {
   align-items: center;
   gap: 12px;
   padding: 16px;
-  background: linear-gradient(135deg, #f5f7fa 0%, #e4e8ec 100%);
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.14), rgba(15, 23, 42, 0.66));
+  border: 1px solid rgba(56, 189, 248, 0.16);
   border-radius: 8px;
 }
 
@@ -355,8 +394,8 @@ export default {
   align-items: center;
   justify-content: center;
   font-size: 24px;
-  background: white;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+  background: rgba(8, 18, 33, 0.72);
+  box-shadow: inset 0 0 18px rgba(34, 211, 238, 0.12), 0 0 16px rgba(14, 165, 233, 0.18);
 }
 
 .stat-info {
@@ -366,12 +405,12 @@ export default {
 .stat-value {
   font-size: 24px;
   font-weight: 600;
-  color: #303133;
+  color: #f8fafc;
 }
 
 .stat-label {
   font-size: 12px;
-  color: #606266;
+  color: #93c5fd;
   margin-top: 4px;
 }
 
@@ -394,7 +433,8 @@ export default {
 }
 
 .chart-item {
-  background: #fafafa;
+  background: rgba(15, 23, 42, 0.5);
+  border: 1px solid rgba(56, 189, 248, 0.12);
   border-radius: 8px;
   padding: 16px;
 }

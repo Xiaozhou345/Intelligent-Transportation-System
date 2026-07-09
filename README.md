@@ -134,9 +134,7 @@
 
 ```
 Intelligent-Transportation-System/
-├── edge/                    # 边端采集模块
-│   ├── video_capture/      # 视频采集
-│   └── video_stream/       # 视频传输
+├── edge_member_a/           # 边端注册、心跳、RTMP联调脚本
 ├── cloud/                   # 云端AI分析模块
 │   ├── stream_receiver/    # 视频流接收
 │   ├── ai_models/          # AI模型
@@ -146,15 +144,14 @@ Intelligent-Transportation-System/
 │   │   └── anomaly_detection/
 │   ├── business_logic/     # 业务逻辑
 │   └── api/                # API接口
-├── frontend/               # 前端展示模块
-│   ├── src/
-│   │   ├── components/    # 组件
-│   │   ├── views/         # 页面
-│   │   └── utils/         # 工具
-│   └── public/
-├── docs/                   # 文档
-│   ├── 需求分析文档.md
-│   └── 系统设计报告.md
+├── ui/                     # Vue3前端展示模块
+│   ├── components/         # 前端组件
+│   ├── utils/              # WebSocket等工具
+│   └── dist/               # 构建产物
+├── deploy/                 # 腾讯云frp公网转发演示配置
+│   └── frp/
+├── 需求分析文档.md
+├── 系统设计报告.md
 └── README.md
 ```
 
@@ -164,25 +161,163 @@ Intelligent-Transportation-System/
 - Python 3.8+
 - Node.js 16+
 - CUDA 11.x (推荐，用于GPU加速)
-- FFmpeg
+- FFmpeg / MediaMTX
+- frp 0.69.x
 
-### 安装依赖
+### 当前演示链路
 
-**云端**
-```bash
-cd cloud
-pip install -r requirements.txt
+本项目当前使用腾讯云轻量服务器做公网中转，本地电脑负责 AI 推理和流媒体服务：
+
+```text
+手机/平板 RTMP 推流
+  -> 腾讯云 106.54.10.11:1935
+  -> frp 转发到本地 AI 电脑 127.0.0.1:1935
+  -> MediaMTX 生成 HLS 127.0.0.1:8888
+  -> frp 转发到 http://106.54.10.11:18888/live/mobile_001/index.m3u8
+  -> Vue 前端使用 hls.js 播放
 ```
 
-**前端**
+浏览器不能直接播放 RTMP，所以前端播放地址是 HLS 的 `.m3u8`，不是 `rtmp://` 地址。
+
+### 1. 腾讯云服务器启动 frps
+
+安全组放行：
+
+```text
+7000
+15000
+1935
+18888
+```
+
+进入 frp 服务端目录并启动：
+
 ```bash
-cd frontend
+cd ~/frp_0.69.1_linux_amd64
+./frps -c frps.toml
+```
+
+`frps.toml` 示例见 [deploy/frp/frps.toml](./deploy/frp/frps.toml)。
+
+### 2. 本地 AI 电脑启动 RTMP/HLS 与后端
+
+先确保本地有三个服务：
+
+```text
+后端 API / Socket.IO: 127.0.0.1:5000
+RTMP 接收服务: 127.0.0.1:1935
+HLS 服务: 127.0.0.1:8888
+```
+
+MediaMTX 负责接收手机 RTMP，并生成 HLS。启动后可以用下面命令检查端口：
+
+```powershell
+Get-NetTCPConnection -LocalPort 1935,8888,5000
+```
+
+### 3. 本地 AI 电脑启动 frpc
+
+配置见 [deploy/frp/frpc.local-ai.toml](./deploy/frp/frpc.local-ai.toml)。启动：
+
+```powershell
+.\frpc.exe -c deploy\frp\frpc.local-ai.toml
+```
+
+启动成功后，公网地址会转发到本地：
+
+```text
+API:  http://106.54.10.11:15000
+RTMP: rtmp://106.54.10.11:1935/live/mobile_001
+HLS:  http://106.54.10.11:18888/live/mobile_001/index.m3u8
+```
+
+### 4. 手机或平板推流
+
+在 Larix Broadcaster 或其他 RTMP 推流软件中填写：
+
+```text
+rtmp://106.54.10.11:1935/live/mobile_001
+```
+
+推荐参数：
+
+```text
+分辨率: 1280x720
+帧率: 10-15fps
+码率: 1-1.5Mbps
+编码: H.264
+```
+
+### 5. 边端注册与心跳
+
+复制配置：
+
+```powershell
+Copy-Item edge_member_a\config.tencent_frp.example.json edge_member_a\config.json
+```
+
+注册设备：
+
+```powershell
+python edge_member_a\edge_client.py --config edge_member_a\config.json register
+```
+
+保持心跳：
+
+```powershell
+python edge_member_a\edge_client.py --config edge_member_a\config.json watch
+```
+
+### 6. 前端启动
+
+复制公网演示环境变量：
+
+```powershell
+Copy-Item ui\.env.tencent-frp.example ui\.env
+```
+
+启动开发服务：
+
+```powershell
+cd ui
+npm install
+npm run dev
+```
+
+构建生产包：
+
+```powershell
+cd ui
+npm run build
+```
+
+### 快速验证
+
+按顺序访问：
+
+```text
+http://106.54.10.11:15000/api/health
+http://106.54.10.11:18888/live/mobile_001/index.m3u8
+```
+
+如果 API 能打开，说明 `5000` 转发正常。
+如果手机开始推流后 HLS 地址能打开，说明 `1935` 和 `8888` 链路正常。
+
+常见问题：
+
+- `./frps: No such file or directory`：先 `cd ~/frp_0.69.1_linux_amd64`，再运行 `./frps -c frps.toml`。
+- 公网 HLS 返回 `502`：通常是本地 MediaMTX 没启动，或 `frpc` 没连上 `frps`。
+- 前端无画面但手机已推流：先直接打开 HLS 地址确认 `.m3u8` 是否可访问；前端只播放 HLS，不播放 RTMP。
+- `127.0.0.1:1935` 连接拒绝：本地 RTMP 服务未监听，先启动 MediaMTX。
+
+更完整的腾讯云 frp 演示说明见 [deploy/tencent-frp-demo.md](./deploy/tencent-frp-demo.md)。
+
+### 前端依赖
+
+```bash
+cd ui
 npm install
 ```
-
-### 运行
-
-待补充...
 
 ## 文档
 

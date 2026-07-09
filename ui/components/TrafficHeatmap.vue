@@ -200,8 +200,8 @@ const updateChart = () => {
         type: 'scatter',
         coordinateSystem: 'cartesian2d',
         data: [
-          { value: [280, 100], itemStyle: { color: '#1e3c72', size: 12 } },
-          { value: [360, 100], itemStyle: { color: '#1e3c72', size: 12 } }
+          { value: [280, 100], itemStyle: { color: '#22d3ee', size: 12 } },
+          { value: [360, 100], itemStyle: { color: '#22d3ee', size: 12 } }
         ],
         symbolSize: 12,
         zlevel: 3,
@@ -256,15 +256,16 @@ onUnmounted(() => {
 
 <style scoped>
 .traffic-heatmap-container {
-  background: white;
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.9), rgba(8, 18, 33, 0.92));
+  border: 1px solid rgba(56, 189, 248, 0.22);
   border-radius: 8px;
   padding: 24px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 18px 38px rgba(2, 8, 23, 0.36), inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
 .traffic-heatmap-container h2 {
   font-size: 18px;
-  color: #303133;
+  color: #e0f2fe;
   margin-bottom: 16px;
 }
 
@@ -299,6 +300,6 @@ onUnmounted(() => {
 
 .legend-text {
   font-size: 14px;
-  color: #606266;
+  color: #dbeafe;
 }
 </style>

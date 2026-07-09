@@ -126,26 +126,27 @@ const decisionStatus = computed(() => {
 
 .label {
   font-size: 14px;
-  color: #606266;
+  color: #93c5fd;
   min-width: 80px;
 }
 
 .value {
   font-size: 14px;
-  color: #303133;
+  color: #e0f2fe;
   font-weight: 500;
 }
 
 .plate-number {
   font-size: 18px;
   font-weight: 600;
-  color: #1e3c72;
+  color: #67e8f9;
   letter-spacing: 2px;
+  text-shadow: 0 0 14px rgba(34, 211, 238, 0.44);
 }
 
 .no-data {
   text-align: center;
-  color: #909399;
+  color: #93c5fd;
   font-size: 14px;
   padding: 20px;
 }

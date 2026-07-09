@@ -1,0 +1,29 @@
+serverAddr = "106.54.10.11"
+serverPort = 7000
+auth.method = "token"
+auth.token = "its_demo_2026"
+
+log.to = "./frpc.log"
+log.level = "info"
+log.maxDays = 3
+
+[[proxies]]
+name = "its-api"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 5000
+remotePort = 15000
+
+[[proxies]]
+name = "its-rtmp"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 1935
+remotePort = 1935
+
+[[proxies]]
+name = "its-hls"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 8888
+remotePort = 18888

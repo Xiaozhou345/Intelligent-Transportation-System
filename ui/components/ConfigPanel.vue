@@ -164,13 +164,13 @@ const handleWhitelistUpdate = () => {
 .config-btn {
   width: 48px;
   height: 48px;
-  border-radius: 50%;
-  border: none;
-  background: #1e3c72;
+  border-radius: 8px;
+  border: 1px solid rgba(125, 211, 252, 0.42);
+  background: linear-gradient(135deg, rgba(8, 145, 178, 0.92), rgba(37, 99, 235, 0.92));
   color: white;
   font-size: 24px;
   cursor: pointer;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 0 20px rgba(34, 211, 238, 0.34);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -179,7 +179,7 @@ const handleWhitelistUpdate = () => {
 
 .config-btn:hover {
   transform: rotate(90deg);
-  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 0 28px rgba(34, 211, 238, 0.58);
 }
 
 .gear-icon {
@@ -206,7 +206,7 @@ const handleWhitelistUpdate = () => {
   width: 50px;
   text-align: right;
   font-size: 14px;
-  color: #606266;
+  color: #93c5fd;
 }
 
 .action-buttons {

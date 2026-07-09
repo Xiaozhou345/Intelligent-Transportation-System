@@ -6,6 +6,26 @@ const props = defineProps({
   videoSrc: {
     type: String,
     required: true
+  },
+  analysisMode: {
+    type: String,
+    default: '车辆检测'
+  },
+  modelName: {
+    type: String,
+    default: 'YOLOv11s'
+  },
+  detectionCount: {
+    type: Number,
+    default: 0
+  },
+  latency: {
+    type: Number,
+    default: 0
+  },
+  streamStatus: {
+    type: String,
+    default: '待连接'
   }
 })
 
@@ -175,6 +195,18 @@ defineExpose({
 
 <template>
   <div ref="containerRef" class="video-player-container">
+    <div class="video-status-bar">
+      <div class="status-left">
+        <span class="live-dot"></span>
+        <strong>{{ analysisMode }}</strong>
+        <span>{{ modelName }}</span>
+      </div>
+      <div class="status-metrics">
+        <span>目标 {{ detectionCount }}</span>
+        <span>延迟 {{ latency }}ms</span>
+        <span>{{ streamStatus }}</span>
+      </div>
+    </div>
     <video
       ref="videoRef"
       class="video-element"
@@ -192,11 +224,13 @@ defineExpose({
 .video-player-container {
   position: relative;
   width: 100%;
-  max-width: 900px;
+  max-width: none;
   margin: 0 auto;
   border-radius: 8px;
   overflow: hidden;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  border: 1px solid rgba(34, 211, 238, 0.3);
+  box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.08), 0 24px 60px rgba(2, 8, 23, 0.5);
+  background: #0f172a;
 }
 
 .video-element {
@@ -215,5 +249,72 @@ defineExpose({
   height: 100%;
   z-index: 2;
   pointer-events: none;
+}
+
+.video-status-bar {
+  align-items: center;
+  background: linear-gradient(90deg, rgba(8, 18, 33, 0.94), rgba(14, 116, 144, 0.42));
+  border-bottom: 1px solid rgba(34, 211, 238, 0.24);
+  color: #ffffff;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  left: 0;
+  padding: 10px 12px;
+  position: absolute;
+  right: 0;
+  top: 0;
+  z-index: 3;
+}
+
+.status-left,
+.status-metrics {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+}
+
+.status-left strong {
+  color: #e0f2fe;
+  font-size: 14px;
+}
+
+.status-left span,
+.status-metrics span {
+  color: #bae6fd;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.live-dot {
+  animation: pulse 1.5s infinite;
+  background: #22c55e;
+  border-radius: 50%;
+  height: 8px;
+  width: 8px;
+}
+
+@keyframes pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.5);
+  }
+  70% {
+    box-shadow: 0 0 0 8px rgba(34, 197, 94, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0);
+  }
+}
+
+@media (max-width: 720px) {
+  .video-status-bar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .status-metrics {
+    flex-wrap: wrap;
+  }
 }
 </style>

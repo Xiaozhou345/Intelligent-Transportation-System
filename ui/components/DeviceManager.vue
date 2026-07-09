@@ -13,6 +13,8 @@ const emit = defineEmits(['add-device'])
 
 const displayDevices = ref([])
 const showAddDialog = ref(false)
+const showDetailDialog = ref(false)
+const currentDevice = ref(null)
 
 const form = reactive({
   device_id: '',
@@ -65,7 +67,8 @@ const handleAddDevice = () => {
 }
 
 const handleViewDetail = (device) => {
-  ElMessage.info(`设备详情：${device.device_id} - ${device.device_type}`)
+  currentDevice.value = device
+  showDetailDialog.value = true
 }
 
 watch(() => props.devices, (newDevices) => {
@@ -131,7 +134,35 @@ watch(() => props.devices, (newDevices) => {
       </ElForm>
       <template #footer>
         <ElButton @click="showAddDialog = false">取消</ElButton>
-        <ElButton type="primary" @click="handleAddDevice">确定</ElButton>
+      <ElButton type="primary" @click="handleAddDevice">确定</ElButton>
+    </template>
+  </ElDialog>
+
+    <ElDialog title="设备详情" v-model="showDetailDialog" width="460px">
+      <div v-if="currentDevice" class="device-detail">
+        <div>
+          <span>设备编号</span>
+          <strong>{{ currentDevice.device_id }}</strong>
+        </div>
+        <div>
+          <span>设备类型</span>
+          <strong>{{ currentDevice.device_type }}</strong>
+        </div>
+        <div>
+          <span>场景编号</span>
+          <strong>{{ currentDevice.scene_id }}</strong>
+        </div>
+        <div>
+          <span>在线状态</span>
+          <strong>{{ getStatusText(currentDevice.status) }}</strong>
+        </div>
+        <div>
+          <span>最后心跳</span>
+          <strong>{{ formatHeartbeat(currentDevice.last_heartbeat) }}</strong>
+        </div>
+      </div>
+      <template #footer>
+        <ElButton @click="showDetailDialog = false">关闭</ElButton>
       </template>
     </ElDialog>
   </div>
@@ -139,10 +170,11 @@ watch(() => props.devices, (newDevices) => {
 
 <style scoped>
 .device-manager {
-  background: white;
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.9), rgba(8, 18, 33, 0.92));
+  border: 1px solid rgba(56, 189, 248, 0.22);
   border-radius: 8px;
   padding: 16px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 18px 38px rgba(2, 8, 23, 0.36), inset 0 1px 0 rgba(255, 255, 255, 0.05);
   margin-top: 16px;
 }
 
@@ -155,7 +187,7 @@ watch(() => props.devices, (newDevices) => {
 
 .device-manager h3 {
   font-size: 16px;
-  color: #303133;
+  color: #e0f2fe;
   margin: 0;
 }
 
@@ -182,13 +214,38 @@ watch(() => props.devices, (newDevices) => {
 
 .status-text {
   font-size: 13px;
-  color: #606266;
+  color: #dbeafe;
 }
 
 .empty-tip {
   text-align: center;
-  color: #909399;
+  color: #93c5fd;
   padding: 20px;
+  font-size: 14px;
+}
+
+.device-detail {
+  display: grid;
+  gap: 10px;
+}
+
+.device-detail div {
+  align-items: center;
+  background: rgba(15, 23, 42, 0.72);
+  border: 1px solid rgba(56, 189, 248, 0.14);
+  border-radius: 8px;
+  display: flex;
+  justify-content: space-between;
+  padding: 10px 12px;
+}
+
+.device-detail span {
+  color: #93c5fd;
+  font-size: 13px;
+}
+
+.device-detail strong {
+  color: #e0f2fe;
   font-size: 14px;
 }
 </style>

@@ -1,6 +1,6 @@
 <script setup>
 import { ref, watch } from 'vue'
-import { ElTable, ElTableColumn, ElTag, ElNotification } from 'element-plus'
+import { ElButton, ElDialog, ElTable, ElTableColumn, ElTag, ElNotification } from 'element-plus'
 
 const props = defineProps({
   records: {
@@ -10,6 +10,11 @@ const props = defineProps({
 })
 
 const displayRecords = ref([])
+const resolvedKeys = ref(new Set())
+const showDetailDialog = ref(false)
+const currentAlarm = ref(null)
+
+const getAlarmKey = (row) => `${row.timestamp || ''}-${row.data?.anomaly_type || ''}-${row.data?.affected_lane || ''}`
 
 const anomalyTypeMap = {
   unknown_object: '不明物体',
@@ -54,7 +59,22 @@ const getStatusType = (status) => {
 }
 
 const handleRowClass = ({ row }) => {
-  return row.status === 'warning' ? 'anomaly-row-highlight' : ''
+  return getDisplayStatus(row) === 'warning' ? 'anomaly-row-highlight' : ''
+}
+
+const getDisplayStatus = (row) => {
+  return resolvedKeys.value.has(getAlarmKey(row)) ? 'resolved' : row.status
+}
+
+const handleResolve = (row) => {
+  const next = new Set(resolvedKeys.value)
+  next.add(getAlarmKey(row))
+  resolvedKeys.value = next
+}
+
+const handleViewDetail = (row) => {
+  currentAlarm.value = row
+  showDetailDialog.value = true
 }
 
 watch(() => props.records, (newRecords) => {
@@ -116,30 +136,66 @@ watch(() => props.records.length, (newLen, oldLen) => {
       </ElTableColumn>
       <ElTableColumn label="状态" width="80" align="center">
         <template #default="{ row }">
-          <ElTag :type="getStatusType(row.status)" size="small">
-            {{ getStatusText(row.status) }}
+          <ElTag :type="getStatusType(getDisplayStatus(row))" size="small">
+            {{ getStatusText(getDisplayStatus(row)) }}
           </ElTag>
+        </template>
+      </ElTableColumn>
+      <ElTableColumn label="操作" width="120" align="center">
+        <template #default="{ row }">
+          <ElButton type="primary" link size="small" @click="handleViewDetail(row)">详情</ElButton>
+          <ElButton
+            v-if="getDisplayStatus(row) === 'warning'"
+            type="success"
+            link
+            size="small"
+            @click="handleResolve(row)"
+          >
+            解除
+          </ElButton>
         </template>
       </ElTableColumn>
     </ElTable>
     <div v-if="displayRecords.length === 0" class="empty-tip">
       暂无道路异常告警记录
     </div>
+
+    <ElDialog title="道路异常详情" v-model="showDetailDialog" width="460px">
+      <div v-if="currentAlarm" class="alarm-detail">
+        <div><span>异常类型</span><strong>{{ getAnomalyTypeText(currentAlarm.data?.anomaly_type) }}</strong></div>
+        <div><span>影响车道</span><strong>{{ getLaneText(currentAlarm.data?.affected_lane) }}</strong></div>
+        <div><span>告警时间</span><strong>{{ formatTime(currentAlarm.timestamp) }}</strong></div>
+        <div><span>持续帧数</span><strong>{{ currentAlarm.data?.duration_frames || 0 }} 帧</strong></div>
+        <div><span>目标位置</span><strong>{{ formatBbox(currentAlarm.bbox) }}</strong></div>
+        <div><span>处置状态</span><strong>{{ getStatusText(getDisplayStatus(currentAlarm)) }}</strong></div>
+      </div>
+      <template #footer>
+        <ElButton @click="showDetailDialog = false">关闭</ElButton>
+        <ElButton
+          v-if="currentAlarm && getDisplayStatus(currentAlarm) === 'warning'"
+          type="primary"
+          @click="handleResolve(currentAlarm); showDetailDialog = false"
+        >
+          解除告警
+        </ElButton>
+      </template>
+    </ElDialog>
   </div>
 </template>
 
 <style scoped>
 .road-anomaly-alarm {
-  background: white;
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.9), rgba(8, 18, 33, 0.92));
+  border: 1px solid rgba(56, 189, 248, 0.22);
   border-radius: 8px;
   padding: 16px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 18px 38px rgba(2, 8, 23, 0.36), inset 0 1px 0 rgba(255, 255, 255, 0.05);
   margin-top: 16px;
 }
 
 .road-anomaly-alarm h3 {
   font-size: 16px;
-  color: #303133;
+  color: #e0f2fe;
   margin-bottom: 12px;
 }
 
@@ -153,8 +209,33 @@ watch(() => props.records.length, (newLen, oldLen) => {
 
 .empty-tip {
   text-align: center;
-  color: #909399;
+  color: #93c5fd;
   padding: 20px;
+  font-size: 14px;
+}
+
+.alarm-detail {
+  display: grid;
+  gap: 10px;
+}
+
+.alarm-detail div {
+  align-items: center;
+  background: rgba(15, 23, 42, 0.72);
+  border: 1px solid rgba(56, 189, 248, 0.14);
+  border-radius: 8px;
+  display: flex;
+  justify-content: space-between;
+  padding: 10px 12px;
+}
+
+.alarm-detail span {
+  color: #93c5fd;
+  font-size: 13px;
+}
+
+.alarm-detail strong {
+  color: #e0f2fe;
   font-size: 14px;
 }
 </style>

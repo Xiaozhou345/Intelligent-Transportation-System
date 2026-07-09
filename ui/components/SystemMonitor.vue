@@ -61,14 +61,14 @@ const createGaugeOption = (value, title) => {
         length: '60%',
         width: 4,
         itemStyle: {
-          color: '#1e3c72'
+          color: '#22d3ee'
         }
       },
       axisTick: {
         distance: -12,
         length: 4,
         lineStyle: {
-          color: '#666',
+          color: '#7dd3fc',
           width: 1
         }
       },
@@ -76,19 +76,19 @@ const createGaugeOption = (value, title) => {
         distance: -18,
         length: 12,
         lineStyle: {
-          color: '#666',
+          color: '#7dd3fc',
           width: 2
         }
       },
       axisLabel: {
-        color: '#666',
+        color: '#93c5fd',
         distance: 20,
         fontSize: 10
       },
       detail: {
         valueAnimation: true,
         formatter: '{value}%',
-        color: '#303133',
+        color: '#e0f2fe',
         fontSize: 16,
         fontWeight: 'bold',
         offsetCenter: [0, '70%']
@@ -96,7 +96,7 @@ const createGaugeOption = (value, title) => {
       title: {
         offsetCenter: [0, '90%'],
         fontSize: 13,
-        color: '#606266'
+        color: '#93c5fd'
       },
       data: [{
         value: value,
@@ -235,15 +235,16 @@ onUnmounted(() => {
 
 <style scoped>
 .system-monitor {
-  background: white;
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.9), rgba(8, 18, 33, 0.92));
+  border: 1px solid rgba(56, 189, 248, 0.22);
   border-radius: 8px;
   padding: 16px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 18px 38px rgba(2, 8, 23, 0.36), inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
 .system-monitor h3 {
   font-size: 16px;
-  color: #303133;
+  color: #e0f2fe;
   margin-bottom: 16px;
 }
 
@@ -270,17 +271,17 @@ onUnmounted(() => {
   align-items: center;
   margin-top: 16px;
   padding-top: 16px;
-  border-top: 1px solid #ebeef5;
+  border-top: 1px solid rgba(56, 189, 248, 0.16);
 }
 
 .stream-info .label {
   font-size: 14px;
-  color: #606266;
+  color: #93c5fd;
 }
 
 .stream-info .value {
   font-size: 14px;
-  color: #303133;
+  color: #e0f2fe;
   font-weight: 500;
 }
 </style>
