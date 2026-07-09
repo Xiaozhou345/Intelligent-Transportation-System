@@ -447,13 +447,21 @@ class VideoProcessor:
 
             regions.append({
                 "region_id": region.get("region_id", "road"),
+                "name": region.get("name", region.get("region_id", "road")),
                 "vehicle_count": count,
                 "status": status,
                 "color": color,
+                "polygon": region.get("polygon", []),
             })
 
         if not regions:
             return None
+
+        summary = ' '.join(
+            f"{item['region_id']}={item['vehicle_count']}({item['status']})"
+            for item in regions
+        )
+        print(f"traffic_density: {summary}")
 
         return {
             "event_type": "traffic_density",
