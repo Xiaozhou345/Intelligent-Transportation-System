@@ -8,5 +8,15 @@ export default defineConfig({
     alias: {
       '@': resolve(__dirname, './')
     }
+  },
+  server: {
+    proxy: {
+      '/socket.io': {
+        target: 'http://172.20.10.4:5000',
+        ws: true,
+        changeOrigin: true,
+        secure: false
+      }
+    }
   }
 })
