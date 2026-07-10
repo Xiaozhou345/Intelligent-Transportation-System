@@ -75,7 +75,7 @@ const closeDialog = () => {
           {{ roleMap[user.role]?.label || user.role }}
         </ElTag>
       </div>
-      <ElButton size="small" plain style="height: 24px; padding: 0 15px; border-radius: 8px;" @click="emit('logout')">退出</ElButton>
+      <ElButton size="small" plain style="height: 32px; padding: 0 15px; border-radius: 8px; line-height: 30px;" @click="emit('logout')">退出</ElButton>
     </template>
     <ElButton v-else size="small" type="primary" @click="emit('update:visible', true)">登录</ElButton>
 
@@ -205,5 +205,16 @@ const closeDialog = () => {
 :global(.login-dialog .el-dialog__title),
 :global(.login-dialog .el-form-item__label) {
   color: #e0f2fe;
+}
+
+/* 加深值班员标签颜色 */
+:global(.user-session .el-tag.el-tag--warning) {
+  --el-tag-bg-color: rgba(234, 179, 8, 0.15);
+  --el-tag-border-color: rgba(234, 179, 8, 0.3);
+  --el-tag-text-color: #ca8a04;
+  background-color: var(--el-tag-bg-color);
+  border-color: var(--el-tag-border-color);
+  color: var(--el-tag-text-color);
+  font-weight: 600;
 }
 </style>
