@@ -586,6 +586,11 @@ class VideoProcessor:
                 if not plate_number:
                     plate_number = self._match_plate_number(device_id, bbox)
 
+                # 构建plate_recognition事件（独立事件，用于车牌记录表）
+                # 注意：此事件与video_overlay.plates和vehicle_detection.plate_number用途不同：
+                # - plate_recognition：独立的车牌识别记录，发送到PlateRecognitionPanel
+                # - video_overlay.plates：视频画面叠加显示，包含bbox和label
+                # - vehicle_detection.plate_number：车辆记录中的关联字段
                 plate_events.append({
                     "event_type": "plate_recognition",
                     "timestamp": timestamp,
@@ -595,9 +600,9 @@ class VideoProcessor:
                     "data": {
                         "plate_number": plate_number,
                         "confidence": plate["confidence"],
-                        "track_id": None,
-                        "is_in_whitelist": False,
-                        "decision": "unknown",
+                        # 未来扩展字段（当前未实现白名单和决策逻辑）
+                        # "is_in_whitelist": False,
+                        # "decision": "unknown",
                     },
                 })
 
