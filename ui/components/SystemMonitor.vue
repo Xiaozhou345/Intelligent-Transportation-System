@@ -72,7 +72,7 @@ const createGaugeOption = (value, title) => {
       splitNumber: 5,
       axisLine: {
         lineStyle: {
-          width: 12,
+          width: 10,
           color: [
             [0.5, '#52c41a'],
             [0.8, '#faad14'],
@@ -81,44 +81,44 @@ const createGaugeOption = (value, title) => {
         }
       },
       pointer: {
-        length: '60%',
-        width: 4,
+        length: '55%',
+        width: 3,
         itemStyle: {
           color: '#22d3ee'
         }
       },
       axisTick: {
-        distance: -12,
-        length: 4,
+        distance: -10,
+        length: 3,
         lineStyle: {
           color: '#7dd3fc',
           width: 1
         }
       },
       splitLine: {
-        distance: -18,
-        length: 12,
+        distance: -15,
+        length: 10,
         lineStyle: {
           color: '#7dd3fc',
-          width: 2
+          width: 1.5
         }
       },
       axisLabel: {
         color: '#93c5fd',
-        distance: 20,
-        fontSize: 10
+        distance: 16,
+        fontSize: 9
       },
       detail: {
         valueAnimation: true,
         formatter: '{value}%',
         color: '#e0f2fe',
-        fontSize: 18,
+        fontSize: 15,
         fontWeight: 'bold',
-        offsetCenter: [0, '60%']
+        offsetCenter: [0, '55%']
       },
       title: {
-        offsetCenter: [0, '85%'],
-        fontSize: 14,
+        offsetCenter: [0, '80%'],
+        fontSize: 12,
         color: '#93c5fd'
       },
       data: [{
@@ -287,7 +287,7 @@ onUnmounted(() => {
   display: flex;
   justify-content: center;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   padding: 0 10px;
 }
 
@@ -296,12 +296,12 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .gauge-chart {
-  width: 110px;
-  height: 110px;
+  width: 100px;
+  height: 100px;
 }
 
 .stream-info {

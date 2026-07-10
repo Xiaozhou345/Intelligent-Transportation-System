@@ -1080,7 +1080,7 @@ onUnmounted(() => {
 }
 
 .overview-card em {
-  color: #0ea5e9;
+  color: #0284c7;
   display: block;
   font-size: 11px;
   font-style: normal;
