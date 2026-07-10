@@ -571,6 +571,12 @@ class VideoProcessor:
                     },
                 })
 
+        # 将车牌识别结果发送到前端（修复：之前只加到video_overlay，导致前端车辆检测表显示"未识别"）
+        for plate_event in plate_events:
+            self._send_result(plate_event)
+            if frame_count % 30 == 0:
+                print(f"车牌识别: {plate_event['data'].get('plate_number', '未识别')} conf={plate_event['data']['confidence']:.2f}")
+
         if vehicles and frame_count % 30 == 0:
             vehicle_debug = [
                 {
@@ -587,7 +593,26 @@ class VideoProcessor:
             )
 
         if self.emit_vehicle_events or active_scene == 'vehicle_detection':
+            # 建立车辆与车牌的空间关联映射（基于bbox IoU）
+            vehicle_plate_map = {}
+            for plate_event in plate_events:
+                plate_bbox = plate_event["bbox"]
+                best_iou = 0
+                best_vehicle_idx = -1
+
+                for idx, vehicle in enumerate(vehicles):
+                    vehicle_bbox = vehicle["bbox"]
+                    # 计算IoU或包含关系
+                    vx1, vy1, vx2, vy2 = vehicle_bbox
+                    px1, py1, px2, py2 = plate_bbox
+
+                    # 检查车牌是否在车辆框内（车牌通常在车辆框内）
+                    if px1 >= vx1 and py1 >= vy1 and px2 <= vx2 and py2 <= vy2:
+                        vehicle_plate_map[idx] = plate_event["data"]["plate_number"]
+                        break
+
             for idx, vehicle in enumerate(vehicles):
+                plate_number = vehicle_plate_map.get(idx, "")
                 self._send_result({
                     "event_type": "vehicle_detection",
                     "timestamp": timestamp,
@@ -596,13 +621,16 @@ class VideoProcessor:
                         "vehicle_id": idx + 1,
                         "vehicle_type": vehicle["class_name"],
                         "confidence": vehicle["confidence"],
+                        "plate_number": plate_number,  # 关联的车牌号
                     },
                     "bbox": vehicle["bbox"],
                     "status": "detected",
                 })
 
+        # 热力图事件：基于同一份YOLO检测结果，与车辆检测保持数据一致性
+        # 在vehicle_detection和traffic_density场景下都发送，确保前端数据同步
         traffic_event = self._build_traffic_density_event(device_id, state, tracked_vehicles, timestamp)
-        if traffic_event is not None and active_scene == 'traffic_density':
+        if traffic_event is not None and active_scene in ['traffic_density', 'vehicle_detection']:
             self._send_result(traffic_event)
 
         parking_events = state["parking_monitor"].update(device_id, tracked_vehicles, timestamp)
