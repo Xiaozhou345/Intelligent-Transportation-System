@@ -548,7 +548,7 @@ defineExpose({
 
 .video-frame-guide span:nth-child(1) {
   left: 14px;
-  top: 14px;
+  top: 50px;
   border-width: 2px 0 0 2px;
 }
 

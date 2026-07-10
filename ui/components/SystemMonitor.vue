@@ -287,8 +287,8 @@ onUnmounted(() => {
   display: flex;
   justify-content: center;
   align-items: center;
-  gap: 20px;
-  padding: 0 20px;
+  gap: 10px;
+  padding: 0 10px;
 }
 
 .gauge-item {
@@ -300,8 +300,8 @@ onUnmounted(() => {
 }
 
 .gauge-chart {
-  width: 140px;
-  height: 140px;
+  width: 110px;
+  height: 110px;
 }
 
 .stream-info {
