@@ -429,11 +429,31 @@ def get_anomaly_status():
 
 # ==================== WebSocket 事件处理 ====================
 
+def system_status_background_task():
+    """后台定时推送系统状态到所有连接的前端客户端"""
+    print("✅ 系统状态推送后台任务已启动")
+    while True:
+        try:
+            time.sleep(3)  # 每3秒推送一次
+            status_data = {
+                "event_type": "system_status",
+                "timestamp": datetime.now().isoformat(),
+                "device_id": "cloud_server",
+                "status": "normal",
+                "data": collect_system_status(),
+            }
+            socketio.emit('analysis_result', status_data, namespace='/')
+        except Exception as e:
+            print(f"系统状态推送失败: {e}")
+            time.sleep(5)  # 出错后等待5秒再重试
+
+
 @socketio.on('connect')
 def handle_connect():
     """前端连接事件"""
     print(f"前端客户端已连接")
     emit('connection_status', {'status': 'connected', 'message': '已连接到云端服务器'})
+    # 立即推送一次系统状态
     emit('analysis_result', {
         "event_type": "system_status",
         "timestamp": datetime.now().isoformat(),
@@ -542,6 +562,7 @@ if __name__ == '__main__':
     print("   - GET    /api/devices           - 获取所有设备")
     print("   - GET    /api/device/<id>       - 获取单个设备信息")
     print("   - GET    /api/health            - 健康检查")
+    print("   - GET    /api/system/status     - 系统状态查询")
     print("\n✅ WebSocket 服务: ws://0.0.0.0:5000/socket.io/")
     print("   - 事件: analysis_result  - AI分析结果推送")
     print("   - 事件: connection_status - 连接状态")
@@ -551,6 +572,9 @@ if __name__ == '__main__':
     print("   - 推荐 stream_url: rtsp://<云端IP>:8554/live/<device_id>")
     print("   - 抽帧策略: 通过 ITS_FRAME_SKIP 环境变量配置")
     print("   - 实时推送分析结果到前端")
+    print("\n✅ 系统监控: 后台定时推送（每3秒）")
+    print("   - CPU使用率、GPU使用率、内存使用率")
+    print("   - 活跃设备数、视频流状态")
     print("\n📝 提供给边端的信息:")
     print("   - HTTP API地址: http://<frp公网IP>:15000 或 http://<本机IP>:5000")
     print("   - SRT推流地址: srt://<云端IP>:8890?streamid=publish:live/<device_id>&latency=200")
@@ -559,6 +583,9 @@ if __name__ == '__main__':
     print("   - 推荐参数: 1280x720, 15fps, H.264, 2Mbps")
     print("\n⚠️  注意: 本地 AI 电脑不启动 MediaMTX；MediaMTX 运行在云端服务器。")
     print("=" * 60 + "\n")
+
+    # 启动系统状态推送后台任务
+    socketio.start_background_task(system_status_background_task)
 
     # 启动Flask-SocketIO服务
     socketio.run(app, host='0.0.0.0', port=5000, debug=False, allow_unsafe_werkzeug=True)
