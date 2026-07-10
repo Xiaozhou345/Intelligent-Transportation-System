@@ -361,12 +361,23 @@ class VideoProcessor:
             print(f"设备 {device_id} 未在处理中")
             return False
 
+        # 设置停止标志，通知处理线程退出
         self.stop_flags[device_id].set()
         self.active_streams[device_id].join(timeout=5)
 
+        # 清理线程资源
         del self.active_streams[device_id]
         del self.stop_flags[device_id]
-        self.runtime_state.pop(device_id, None)
+
+        # 清理运行时状态（包含ByteTrack跟踪器）
+        state = self.runtime_state.pop(device_id, None)
+        if state and "tracker" in state:
+            # ByteTrack跟踪器可能有内部缓存，确保清理
+            # 避免设备重新注册时track_id冲突
+            del state["tracker"]
+            print(f"已清理设备 {device_id} 的跟踪器状态（防止track_id冲突）")
+
+        # 清理车牌缓存
         self.plate_cache.pop(device_id, None)
 
         print(f"停止处理设备 {device_id} 的视频流")
