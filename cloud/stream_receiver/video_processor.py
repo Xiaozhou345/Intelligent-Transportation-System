@@ -766,7 +766,8 @@ class VideoProcessor:
         print(
             f"帧 {frame_count}: video_overlay vehicles={len(overlay['data']['vehicles'])} "
             f"plates={len(overlay['data']['plates'])} illegal={len(overlay['data']['illegal_parking'])} "
-            f"anomalies={len(overlay['data']['road_anomalies'])}"
+            f"anomalies={len(overlay['data']['road_anomalies'])} "
+            f"no_parking_zones={len(overlay['data']['no_parking_zones'])}"
         )
         self._send_result(overlay)
 
