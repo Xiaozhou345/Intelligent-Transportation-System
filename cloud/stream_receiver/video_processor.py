@@ -73,7 +73,7 @@ class VideoProcessor:
         self.vehicle_detector = None
         self.plate_detector = None
         self.plate_recognizer = None
-        self.vehicle_conf = float(os.getenv("ITS_VEHICLE_CONF", "0.45"))
+        self.vehicle_conf = float(os.getenv("ITS_VEHICLE_CONF", "0.50"))
         self.plate_conf = float(os.getenv("ITS_PLATE_CONF", "0.20"))
 
         # 车牌号缓存：{device_id: [(bbox, plate_number, timestamp), ...]}
