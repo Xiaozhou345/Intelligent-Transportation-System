@@ -517,10 +517,12 @@ class VideoProcessor:
         else:
             vehicles = self.vehicle_detector.detect(frame)
             tracked_vehicles = state["tracker"].update(vehicles)
+            # 使用tracked_vehicles而非vehicles构建掩膜，确保数据一致性
+            # 同时保持高置信度过滤，避免低置信度车辆被误报为道路异常
             vehicle_bboxes = [
-                vehicle["bbox"]
-                for vehicle in vehicles
-                if vehicle.get("confidence", 0) >= self.vehicle_mask_min_conf
+                tracked["bbox"]
+                for tracked in tracked_vehicles
+                if tracked.get("confidence", 0) >= self.vehicle_mask_min_conf
             ]
 
         plate_events = []
@@ -542,15 +544,14 @@ class VideoProcessor:
                         plate_img = frame[y1:y2, x1:x2]
                         if plate_img.size > 0:
                             try:
-                                plate_number = self.plate_recognizer.recognize(plate_img)
+                                recognized = self.plate_recognizer.recognize(plate_img)
                                 # 如果识别成功，更新缓存
-                                if plate_number and len(plate_number.strip()) >= 4:
+                                if recognized and len(recognized.strip()) >= 4:
+                                    plate_number = recognized
                                     self.update_plate_number(device_id, bbox, plate_number)
-                                else:
-                                    plate_number = ""
                             except Exception as e:
-                                if frame_count % 30 == 0:
-                                    print(f"⚠️  车牌OCR失败: {str(e)}")
+                                # 记录所有OCR错误（不只是每30帧），便于诊断模型问题
+                                print(f"⚠️  车牌OCR失败 (frame {frame_count}): {str(e)}")
 
                 # 如果没有识别出来，尝试从缓存匹配
                 if not plate_number:
@@ -571,11 +572,12 @@ class VideoProcessor:
                     },
                 })
 
-        # 将车牌识别结果发送到前端（修复：之前只加到video_overlay，导致前端车辆检测表显示"未识别"）
-        for plate_event in plate_events:
-            self._send_result(plate_event)
-            if frame_count % 30 == 0:
-                print(f"车牌识别: {plate_event['data'].get('plate_number', '未识别')} conf={plate_event['data']['confidence']:.2f}")
+        # 将车牌识别结果发送到前端（仅在相关场景下发送，保持与其他事件的一致性）
+        if active_scene in ['vehicle_detection', 'plate_recognition']:
+            for plate_event in plate_events:
+                self._send_result(plate_event)
+                if frame_count % 30 == 0:
+                    print(f"车牌识别: {plate_event['data'].get('plate_number', '未识别')} conf={plate_event['data']['confidence']:.2f}")
 
         if vehicles and frame_count % 30 == 0:
             vehicle_debug = [
@@ -593,37 +595,47 @@ class VideoProcessor:
             )
 
         if self.emit_vehicle_events or active_scene == 'vehicle_detection':
-            # 建立车辆与车牌的空间关联映射（基于bbox IoU）
+            # 建立车辆与车牌的空间关联映射（使用最佳匹配算法，优先选择IoU最大的车辆）
             vehicle_plate_map = {}
             for plate_event in plate_events:
                 plate_bbox = plate_event["bbox"]
-                best_iou = 0
-                best_vehicle_idx = -1
+                px1, py1, px2, py2 = plate_bbox
+                plate_area = (px2 - px1) * (py2 - py1)
 
-                for idx, vehicle in enumerate(vehicles):
-                    vehicle_bbox = vehicle["bbox"]
-                    # 计算IoU或包含关系
+                best_match_idx = -1
+                best_overlap_ratio = 0.0
+
+                for idx, tracked in enumerate(tracked_vehicles):
+                    vehicle_bbox = tracked["bbox"]
                     vx1, vy1, vx2, vy2 = vehicle_bbox
-                    px1, py1, px2, py2 = plate_bbox
 
                     # 检查车牌是否在车辆框内（车牌通常在车辆框内）
                     if px1 >= vx1 and py1 >= vy1 and px2 <= vx2 and py2 <= vy2:
-                        vehicle_plate_map[idx] = plate_event["data"]["plate_number"]
-                        break
+                        # 计算重叠比例（车牌面积占车辆面积的比例）
+                        vehicle_area = (vx2 - vx1) * (vy2 - vy1)
+                        overlap_ratio = plate_area / vehicle_area if vehicle_area > 0 else 0
 
-            for idx, vehicle in enumerate(vehicles):
+                        if overlap_ratio > best_overlap_ratio:
+                            best_overlap_ratio = overlap_ratio
+                            best_match_idx = idx
+
+                if best_match_idx >= 0:
+                    vehicle_plate_map[best_match_idx] = plate_event["data"]["plate_number"]
+
+            # 使用tracked_vehicles而不是vehicles，确保包含track_id
+            for idx, tracked in enumerate(tracked_vehicles):
                 plate_number = vehicle_plate_map.get(idx, "")
                 self._send_result({
                     "event_type": "vehicle_detection",
                     "timestamp": timestamp,
                     "device_id": device_id,
                     "data": {
-                        "vehicle_id": idx + 1,
-                        "vehicle_type": vehicle["class_name"],
-                        "confidence": vehicle["confidence"],
+                        "vehicle_id": tracked.get("track_id", idx + 1),  # 使用跟踪ID，确保跨帧一致性
+                        "vehicle_type": tracked["class_name"],
+                        "confidence": tracked["confidence"],
                         "plate_number": plate_number,  # 关联的车牌号
                     },
-                    "bbox": vehicle["bbox"],
+                    "bbox": tracked["bbox"],
                     "status": "detected",
                 })
 
