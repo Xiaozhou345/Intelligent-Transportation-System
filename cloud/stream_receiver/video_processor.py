@@ -701,18 +701,62 @@ class VideoProcessor:
         if state["processed_frames"] % emit_every != 0:
             return None
 
+        # 获取视频分辨率
+        frame_shape = state.get("frame_shape")
+        if frame_shape is None:
+            return None
+
+        height, width = frame_shape[:2]
+
+        # 网格配置（可通过state配置覆盖）
+        grid_cols = state.get("density_grid_cols", 20)
+        grid_rows = state.get("density_grid_rows", 15)
+
+        # 计算每个网格的宽高
+        cell_width = width / grid_cols
+        cell_height = height / grid_rows
+
+        # 初始化网格计数器
+        grid_counts = {}
+
+        # 统计每辆车所在的网格
+        for tracked in tracked_vehicles:
+            anchor = self._bottom_center(tracked["bbox"])
+            x, y = anchor
+
+            # 计算车辆所在网格索引
+            col = int(x / cell_width)
+            row = int(y / cell_height)
+
+            # 边界检查
+            if 0 <= col < grid_cols and 0 <= row < grid_rows:
+                grid_key = (row, col)
+                grid_counts[grid_key] = grid_counts.get(grid_key, 0) + 1
+
+        # 只发送有车辆的网格（减少数据量）
+        if not grid_counts:
+            return None
+
         thresholds = state.get("traffic_thresholds", {"smooth_max": 2, "slow_max": 5})
         smooth_max = thresholds.get("smooth_max", 2)
         slow_max = thresholds.get("slow_max", 5)
 
         regions = []
-        for region in state.get("traffic_regions", []):
-            count = 0
-            for tracked in tracked_vehicles:
-                anchor = self._bottom_center(tracked["bbox"])
-                if self._point_in_polygon(anchor, region.get("polygon", [])):
-                    count += 1
+        for (row, col), count in grid_counts.items():
+            # 计算网格的四个角坐标
+            x1 = col * cell_width
+            y1 = row * cell_height
+            x2 = x1 + cell_width
+            y2 = y1 + cell_height
 
+            polygon = [
+                [x1, y1],
+                [x2, y1],
+                [x2, y2],
+                [x1, y2]
+            ]
+
+            # 判断拥堵状态
             if count <= smooth_max:
                 status = "smooth"
                 color = "green"
@@ -724,21 +768,15 @@ class VideoProcessor:
                 color = "red"
 
             regions.append({
-                "region_id": region.get("region_id", "road"),
-                "name": region.get("name", region.get("region_id", "road")),
+                "region_id": f"grid_{row}_{col}",
+                "name": f"区域{row}-{col}",
                 "vehicle_count": count,
                 "status": status,
                 "color": color,
-                "polygon": region.get("polygon", []),
+                "polygon": polygon,
             })
 
-        if not regions:
-            return None
-
-        summary = ' '.join(
-            f"{item['region_id']}={item['vehicle_count']}({item['status']})"
-            for item in regions
-        )
+        summary = f"共{len(regions)}个网格有车辆，总计{sum(grid_counts.values())}辆"
         print(f"traffic_density: {summary}")
 
         return {
