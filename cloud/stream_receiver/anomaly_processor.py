@@ -68,7 +68,7 @@ class RoadAnomalyProcessor:
         """Feed clean static-camera frames into the background model."""
         if road_mask is None and self.drivable_segmenter:
             road_mask = self.drivable_segmenter.predict_mask(frame)
-        self.detector.update_background(
+        return self.detector.update_background(
             frame=frame,
             road_mask=road_mask,
             vehicle_bboxes=vehicle_bboxes,

@@ -177,6 +177,39 @@ class WebSocketManager {
         }
       })
 
+      this.ws.on('anomaly_mode_updated', (data) => {
+        if (this.onMessageCallback) {
+          this.onMessageCallback({
+            event_type: 'anomaly_mode_updated',
+            timestamp: new Date().toISOString(),
+            status: data.status || 'normal',
+            data
+          })
+        }
+      })
+
+      this.ws.on('scene_switched', (data) => {
+        if (this.onMessageCallback) {
+          this.onMessageCallback({
+            event_type: 'scene_switched',
+            timestamp: new Date().toISOString(),
+            status: 'normal',
+            data
+          })
+        }
+      })
+
+      this.ws.on('devices_list', (data) => {
+        if (this.onMessageCallback) {
+          this.onMessageCallback({
+            event_type: 'devices_list',
+            timestamp: new Date().toISOString(),
+            status: 'normal',
+            data
+          })
+        }
+      })
+
       this.ws.on('connect_error', (error) => {
         console.error('❌ Socket.IO 连接错误:', error)
         this.status = 'error'
@@ -261,6 +294,19 @@ class WebSocketManager {
 
     if (this.ws && this.ws.connected) {
       this.ws.emit('client_command', data)
+      return true
+    }
+    return false
+  }
+
+  sendEvent(eventName, data = {}) {
+    if (this.isSimulation) {
+      console.log('🟡 [模拟模式] 发送事件:', eventName, data)
+      return true
+    }
+
+    if (this.ws && this.ws.connected) {
+      this.ws.emit(eventName, data)
       return true
     }
     return false
