@@ -1009,8 +1009,26 @@ class VideoProcessor:
         print(f"已更新车辆检测置信度阈值: {confidence}")
 
     @staticmethod
+    @staticmethod
     def _bottom_center(bbox):
+        """
+        计算bbox底部中心点坐标（用于网格统计）
+
+        Args:
+            bbox: [x1, y1, x2, y2] 格式的边界框
+
+        Returns:
+            (center_x, bottom_y) 整数坐标元组
+        """
+        if not bbox or len(bbox) != 4:
+            raise ValueError(f"Invalid bbox format: {bbox}, expected [x1, y1, x2, y2]")
+
         x1, y1, x2, y2 = bbox
+
+        # 验证坐标顺序（x2应大于x1，y2应大于y1）
+        if x2 <= x1 or y2 <= y1:
+            raise ValueError(f"Invalid bbox coordinates: x2({x2}) <= x1({x1}) or y2({y2}) <= y1({y1})")
+
         return int((x1 + x2) / 2), int(y2)
 
     @staticmethod
