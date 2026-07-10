@@ -201,21 +201,37 @@ class VideoProcessor:
                     os.path.join(AI_MODELS_DIR, "plate_recognition", "Final_LPRNet_model.pth"),
                     os.path.join(REPO_ROOT, "models", "lprnet_best.pth"),
                 ]
+
                 lprnet_path = None
+                lprnet_load_success = False
+
                 for path in lprnet_candidates:
                     if os.path.exists(path):
-                        lprnet_path = path
-                        break
+                        print(f"🔍 尝试加载LPRNet模型: {path}")
+                        try:
+                            # 验证文件是否可读且大小合理
+                            file_size = os.path.getsize(path)
+                            if file_size < 1000:  # 模型文件至少应该有1KB
+                                print(f"⚠️  模型文件过小 ({file_size} bytes)，可能已损坏，跳过")
+                                continue
 
-                if lprnet_path:
-                    try:
-                        self.plate_recognizer = PlateRecognizer(model_path=lprnet_path)
-                        print(f"✅ 车牌识别（LPRNet）已启用: {lprnet_path}")
-                    except Exception as e:
-                        print(f"⚠️  车牌识别（LPRNet）加载失败: {str(e)}")
-                        self.plate_recognizer = None
-                else:
-                    print("⚠️  未找到LPRNet模型，车牌框将不显示车牌号")
+                            self.plate_recognizer = PlateRecognizer(model_path=path)
+                            print(f"✅ 车牌识别（LPRNet）已启用: {path}")
+                            lprnet_path = path
+                            lprnet_load_success = True
+                            break
+                        except Exception as e:
+                            print(f"⚠️  模型加载失败 ({path}): {str(e)}")
+                            self.plate_recognizer = None
+                            continue
+
+                if not lprnet_load_success:
+                    if lprnet_path is None:
+                        print(f"⚠️  未找到LPRNet模型文件，搜索路径:")
+                        for path in lprnet_candidates:
+                            print(f"     - {path} {'[存在]' if os.path.exists(path) else '[不存在]'}")
+                    print("⚠️  车牌识别功能不可用，车牌框将不显示车牌号")
+                    self.plate_recognizer = None
             else:
                 print("⚠️  未找到车牌检测权重，视频叠加中的车牌框将为空")
         except Exception as e:
