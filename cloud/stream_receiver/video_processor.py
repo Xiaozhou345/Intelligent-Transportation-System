@@ -41,6 +41,7 @@ from detector import VehicleDetector
 from vehicle_tracker import VehicleTracker
 from illegal_parking import IllegalParkingMonitor
 from plate_detection.detector import PlateDetector
+from plate_recognition.recognizer import PlateRecognizer
 from cloud.database import mysql_client
 
 
@@ -64,8 +65,12 @@ class VideoProcessor:
         self.anomaly_processor = None
         self.vehicle_detector = None
         self.plate_detector = None
+        self.plate_recognizer = None
         self.vehicle_conf = float(os.getenv("ITS_VEHICLE_CONF", "0.45"))
         self.plate_conf = float(os.getenv("ITS_PLATE_CONF", "0.20"))
+
+        # 车牌号缓存：{device_id: [(bbox, plate_number, timestamp), ...]}
+        self.plate_cache: Dict[str, List[tuple]] = {}
 
         self.runtime_defaults = self._load_runtime_defaults()
         self.runtime_state: Dict[str, dict] = {}
@@ -183,6 +188,27 @@ class VideoProcessor:
                     conf_threshold=self.plate_conf,
                 )
                 print("✅ 共享车牌检测已启用（服务于视频叠加显示）")
+
+                # 尝试加载车牌识别模型（LPRNet）
+                lprnet_candidates = [
+                    os.path.join(AI_MODELS_DIR, "plate_recognition", "Final_LPRNet_model.pth"),
+                    os.path.join(REPO_ROOT, "models", "lprnet_best.pth"),
+                ]
+                lprnet_path = None
+                for path in lprnet_candidates:
+                    if os.path.exists(path):
+                        lprnet_path = path
+                        break
+
+                if lprnet_path:
+                    try:
+                        self.plate_recognizer = PlateRecognizer(model_path=lprnet_path)
+                        print(f"✅ 车牌识别（LPRNet）已启用: {lprnet_path}")
+                    except Exception as e:
+                        print(f"⚠️  车牌识别（LPRNet）加载失败: {str(e)}")
+                        self.plate_recognizer = None
+                else:
+                    print("⚠️  未找到LPRNet模型，车牌框将不显示车牌号")
             else:
                 print("⚠️  未找到车牌检测权重，视频叠加中的车牌框将为空")
         except Exception as e:
@@ -318,9 +344,89 @@ class VideoProcessor:
         del self.active_streams[device_id]
         del self.stop_flags[device_id]
         self.runtime_state.pop(device_id, None)
+        self.plate_cache.pop(device_id, None)
 
         print(f"停止处理设备 {device_id} 的视频流")
         return True
+
+    def update_plate_number(self, device_id, bbox, plate_number):
+        """
+        更新车牌号缓存（由plate_recognition_processor调用）
+
+        Args:
+            device_id: 设备ID
+            bbox: 车牌框 [x1, y1, x2, y2]
+            plate_number: 识别出的车牌号
+        """
+        if device_id not in self.plate_cache:
+            self.plate_cache[device_id] = []
+
+        current_time = time.time()
+        # 添加新识别结果
+        self.plate_cache[device_id].append((bbox, plate_number, current_time))
+
+        # 清理超过30秒的旧缓存
+        self.plate_cache[device_id] = [
+            (b, p, t) for b, p, t in self.plate_cache[device_id]
+            if current_time - t < 30
+        ]
+
+        # 最多保留50条
+        if len(self.plate_cache[device_id]) > 50:
+            self.plate_cache[device_id] = self.plate_cache[device_id][-50:]
+
+    def _match_plate_number(self, device_id, bbox):
+        """
+        根据bbox匹配最近识别的车牌号
+
+        Args:
+            device_id: 设备ID
+            bbox: 车牌框 [x1, y1, x2, y2]
+
+        Returns:
+            str: 车牌号，如果没有匹配则返回空字符串
+        """
+        if device_id not in self.plate_cache or not self.plate_cache[device_id]:
+            return ""
+
+        x1, y1, x2, y2 = bbox
+        cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+
+        # 找最近的匹配（IoU > 0.3 或中心点距离很近）
+        best_match = None
+        best_score = 0
+
+        for cached_bbox, plate_number, timestamp in self.plate_cache[device_id]:
+            bx1, by1, bx2, by2 = cached_bbox
+            bcx, bcy = (bx1 + bx2) / 2, (by1 + by2) / 2
+
+            # 计算IoU
+            inter_x1 = max(x1, bx1)
+            inter_y1 = max(y1, by1)
+            inter_x2 = min(x2, bx2)
+            inter_y2 = min(y2, by2)
+
+            if inter_x2 > inter_x1 and inter_y2 > inter_y1:
+                inter_area = (inter_x2 - inter_x1) * (inter_y2 - inter_y1)
+                bbox_area = (x2 - x1) * (y2 - y1)
+                cached_area = (bx2 - bx1) * (by2 - by1)
+                iou = inter_area / (bbox_area + cached_area - inter_area + 1e-6)
+            else:
+                iou = 0
+
+            # 计算中心点距离
+            distance = ((cx - bcx) ** 2 + (cy - bcy) ** 2) ** 0.5
+            bbox_size = ((x2 - x1) ** 2 + (y2 - y1) ** 2) ** 0.5
+            normalized_distance = distance / (bbox_size + 1e-6)
+
+            # 综合评分：IoU权重更高
+            score = iou * 0.7 + (1.0 - min(normalized_distance, 1.0)) * 0.3
+
+            if score > best_score and score > 0.3:
+                best_score = score
+                best_match = plate_number
+
+        return best_match or ""
 
     def _process_stream(self, device_id, stream_url, stop_event):
         cap = None
@@ -414,14 +520,43 @@ class VideoProcessor:
         if self.plate_detector:
             detected_plates = self.plate_detector.detect(frame)
             for plate in detected_plates:
+                bbox = plate["bbox"]
+                plate_number = ""
+
+                # 如果有LPRNet，立即识别车牌号
+                if self.plate_recognizer:
+                    x1, y1, x2, y2 = bbox
+                    # 确保坐标在图像范围内
+                    h, w = frame.shape[:2]
+                    x1, y1 = max(0, x1), max(0, y1)
+                    x2, y2 = min(w, x2), min(h, y2)
+
+                    if x2 > x1 and y2 > y1:
+                        plate_img = frame[y1:y2, x1:x2]
+                        if plate_img.size > 0:
+                            try:
+                                plate_number = self.plate_recognizer.recognize(plate_img)
+                                # 如果识别成功，更新缓存
+                                if plate_number and len(plate_number.strip()) >= 4:
+                                    self.update_plate_number(device_id, bbox, plate_number)
+                                else:
+                                    plate_number = ""
+                            except Exception as e:
+                                if frame_count % 30 == 0:
+                                    print(f"⚠️  车牌OCR失败: {str(e)}")
+
+                # 如果没有识别出来，尝试从缓存匹配
+                if not plate_number:
+                    plate_number = self._match_plate_number(device_id, bbox)
+
                 plate_events.append({
                     "event_type": "plate_recognition",
                     "timestamp": timestamp,
                     "device_id": device_id,
-                    "bbox": plate["bbox"],
+                    "bbox": bbox,
                     "status": "normal",
                     "data": {
-                        "plate_number": "",
+                        "plate_number": plate_number,
                         "confidence": plate["confidence"],
                         "track_id": None,
                         "is_in_whitelist": False,
