@@ -20,6 +20,7 @@ sys.path.insert(0, plate_detection_dir)
 
 from plate_detection.detector import PlateDetector
 from plate_recognition.plate_recognizer import PlateRecognizer
+from cloud.database import mysql_client
 
 
 class PlateRecognitionProcessor:
@@ -272,6 +273,9 @@ class PlateRecognitionProcessor:
                 }
 
                 self.results_queue.put(result)
+                device = self.device_manager.get_device(device_id)
+                scene_id = device.scene_id if device else None
+                mysql_client.insert_recognition_event('plate_recognition', device_id, result, scene_id=scene_id)
 
                 print(f"   车牌 #{idx + 1}:")
                 print(f"      车牌号: {plate_number}")
@@ -295,6 +299,11 @@ class PlateRecognitionProcessor:
         Returns:
             bool: 是否在白名单
         """
+        row = mysql_client.get_whitelist_entry(plate_number)
+        if row is not None:
+            return bool(row.get('permission_status', 0))
+
+        # 数据库不可用或未录入时，退回临时白名单
         whitelist = ['京A12345', '沪B67890', '粤C88888', '京D99999']
         return plate_number in whitelist
 

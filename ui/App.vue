@@ -291,7 +291,7 @@ const buildVehicleBoxes = (records) => {
       label: record.data?.confidence === undefined
         ? (record.data?.vehicle_type || record.data?.plate_number || 'vehicle')
         : `${record.data?.vehicle_type || record.data?.plate_number || 'vehicle'} ${Math.round(record.data.confidence * 100)}%`,
-      color: index === 0 ? '#ef4444' : '#f59e0b'
+      color: index === 0 ? '#ef4444' : '#ef4444'
     }))
 }
 
@@ -322,9 +322,9 @@ const buildOverlayBoxes = (overlay) => {
 
   return [
     ...normalizePolygons(data.no_parking_zones, '#f97316', 'rgba(249, 115, 22, 0.16)', 'no parking'),
-    ...normalize(data.vehicles, '#38bdf8', 'vehicle'),
-    ...normalize(data.plates, '#22c55e', 'plate'),
-    ...normalize(data.illegal_parking, '#ef4444', 'illegal'),
+    ...normalize(data.vehicles, '#ef4444', 'vehicle'),
+    ...normalize(data.plates, '#f59e0b', 'plate'),
+    ...normalize(data.illegal_parking, '#b91c1c', 'illegal'),
     ...normalize(data.road_anomalies, '#a855f7', 'anomaly')
   ]
 }

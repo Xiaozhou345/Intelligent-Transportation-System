@@ -23,6 +23,7 @@ CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 AI_MODELS_DIR = os.path.join(CURRENT_DIR, "..", "ai_models")
 VEHICLE_DETECTION_DIR = os.path.join(AI_MODELS_DIR, "vehicle_detection")
 VEHICLE_TRACKING_DIR = os.path.join(AI_MODELS_DIR, "vehicle_tracking")
+PLATE_DETECTION_DIR = os.path.join(AI_MODELS_DIR, "plate_detection")
 BUSINESS_LOGIC_DIR = os.path.join(os.path.dirname(CURRENT_DIR), "business_logic")
 REPO_ROOT = Path(CURRENT_DIR).parents[1]
 if AI_MODELS_DIR not in sys.path:
@@ -31,12 +32,16 @@ if VEHICLE_DETECTION_DIR not in sys.path:
     sys.path.append(VEHICLE_DETECTION_DIR)
 if VEHICLE_TRACKING_DIR not in sys.path:
     sys.path.append(VEHICLE_TRACKING_DIR)
+if PLATE_DETECTION_DIR not in sys.path:
+    sys.path.append(PLATE_DETECTION_DIR)
 if BUSINESS_LOGIC_DIR not in sys.path:
     sys.path.append(BUSINESS_LOGIC_DIR)
 
 from detector import VehicleDetector
 from vehicle_tracker import VehicleTracker
 from illegal_parking import IllegalParkingMonitor
+from plate_detection.detector import PlateDetector
+from cloud.database import mysql_client
 
 
 class VideoProcessor:
@@ -58,7 +63,9 @@ class VideoProcessor:
 
         self.anomaly_processor = None
         self.vehicle_detector = None
+        self.plate_detector = None
         self.vehicle_conf = float(os.getenv("ITS_VEHICLE_CONF", "0.45"))
+        self.plate_conf = float(os.getenv("ITS_PLATE_CONF", "0.20"))
 
         self.runtime_defaults = self._load_runtime_defaults()
         self.runtime_state: Dict[str, dict] = {}
@@ -81,15 +88,24 @@ class VideoProcessor:
         }
         if not config_path.exists():
             print("⚠️  未找到 illegal_parking_config.json，将使用内置默认配置")
-            return defaults
+        else:
+            try:
+                data = json.loads(config_path.read_text(encoding="utf-8"))
+                file_defaults = data.get("default", {})
+                defaults.update(file_defaults)
+                print(f"✅ 已加载违停/热力图本地配置: {config_path}")
+            except Exception as exc:
+                print(f"⚠️  违停配置加载失败，将使用内置默认配置: {exc}")
 
-        try:
-            data = json.loads(config_path.read_text(encoding="utf-8"))
-            file_defaults = data.get("default", {})
-            defaults.update(file_defaults)
-            print(f"✅ 已加载违停/热力图配置: {config_path}")
-        except Exception as exc:
-            print(f"⚠️  违停配置加载失败，将使用内置默认配置: {exc}")
+        db_config = mysql_client.load_system_config()
+        if db_config:
+            if 'traffic_thresholds' in db_config:
+                defaults['traffic_thresholds'] = db_config['traffic_thresholds']
+            if 'no_parking_zone_default' in db_config:
+                defaults['no_parking_zones'] = db_config['no_parking_zone_default']
+            print("✅ 已从 MySQL system_config 加载运行时配置")
+        else:
+            print("ℹ️  system_config 未加载，继续使用本地 JSON 配置")
         return defaults
 
     def _init_sandbox_ai(self):
@@ -152,9 +168,20 @@ class VideoProcessor:
                 conf_threshold=self.vehicle_conf,
             )
             print("✅ 共享车辆检测已启用（服务于拥堵/违停/异常检测）")
+
+            plate_model_path = os.path.join(AI_MODELS_DIR, "plate_detection", "sandbox_plate_best.pt")
+            if os.path.exists(plate_model_path):
+                self.plate_detector = PlateDetector(
+                    model_path=plate_model_path,
+                    conf_threshold=self.plate_conf,
+                )
+                print("✅ 共享车牌检测已启用（服务于视频叠加显示）")
+            else:
+                print("⚠️  未找到车牌检测权重，视频叠加中的车牌框将为空")
         except Exception as e:
             print(f"⚠️  车辆检测初始化失败，道路异常检测将继续运行: {str(e)}")
             self.vehicle_detector = None
+            self.plate_detector = None
 
     def _get_or_create_runtime_state(self, device_id, frame_shape=None):
         state = self.runtime_state.get(device_id)
@@ -348,6 +375,25 @@ class VideoProcessor:
                 if vehicle.get("confidence", 0) >= self.vehicle_mask_min_conf
             ]
 
+        plate_events = []
+        if self.plate_detector:
+            detected_plates = self.plate_detector.detect(frame)
+            for plate in detected_plates:
+                plate_events.append({
+                    "event_type": "plate_recognition",
+                    "timestamp": timestamp,
+                    "device_id": device_id,
+                    "bbox": plate["bbox"],
+                    "status": "normal",
+                    "data": {
+                        "plate_number": "",
+                        "confidence": plate["confidence"],
+                        "track_id": None,
+                        "is_in_whitelist": False,
+                        "decision": "unknown",
+                    },
+                })
+
         if vehicles and frame_count % 30 == 0:
             vehicle_debug = [
                 {
@@ -359,6 +405,7 @@ class VideoProcessor:
             ]
             print(
                 f"帧 {frame_count}: 车辆检测 {len(vehicles)} 个，"
+                f"车牌检测 {len(plate_events)} 个，"
                 f"用于掩膜 {len(vehicle_bboxes)} 个 {vehicle_debug}"
             )
 
@@ -445,10 +492,16 @@ class VideoProcessor:
             device_id=device_id,
             timestamp=timestamp,
             frame=frame,
+            state=state,
             tracked_vehicles=tracked_vehicles,
             parking_events=parking_events,
             anomaly_events=anomaly_events,
-            plate_events=[],
+            plate_events=plate_events,
+        )
+        print(
+            f"帧 {frame_count}: video_overlay vehicles={len(overlay['data']['vehicles'])} "
+            f"plates={len(overlay['data']['plates'])} illegal={len(overlay['data']['illegal_parking'])} "
+            f"anomalies={len(overlay['data']['road_anomalies'])}"
         )
         self._send_result(overlay)
 
@@ -632,7 +685,7 @@ class VideoProcessor:
             j = i
         return inside
 
-    def _build_video_overlay(self, device_id, timestamp, frame, tracked_vehicles, parking_events, anomaly_events, plate_events):
+    def _build_video_overlay(self, device_id, timestamp, frame, state, tracked_vehicles, parking_events, anomaly_events, plate_events):
         overlay = {
             'event_type': 'video_overlay',
             'timestamp': timestamp,
@@ -661,10 +714,12 @@ class VideoProcessor:
 
         for event in plate_events:
             bbox = [int(v) for v in event.get('bbox', [])]
+            plate_number = event.get('data', {}).get('plate_number')
+            confidence = event.get('data', {}).get('confidence', 0)
             overlay['data']['plates'].append({
                 'bbox': bbox,
-                'label': event.get('data', {}).get('plate_number', 'plate'),
-                'confidence': event.get('data', {}).get('confidence', 0),
+                'label': plate_number or f"plate {confidence:.2f}",
+                'confidence': confidence,
                 'track_id': event.get('data', {}).get('track_id'),
             })
 
@@ -784,8 +839,20 @@ class VideoProcessor:
 
     def _send_result(self, result):
         try:
+            event_type = result['event_type']
             self.socketio.emit('analysis_result', result)
-            print(f"推送结果: {result['event_type']}")
+            print(f"推送结果: {event_type}")
+
+            scene_id = None
+            device = self.device_manager.get_device(result.get('device_id')) if result.get('device_id') else None
+            if device:
+                scene_id = device.scene_id
+
+            # video_overlay / connection-like transient messages 不入库
+            if event_type not in {'video_overlay', 'anomaly_calibration', 'video_segment_uploaded'}:
+                mysql_client.insert_recognition_event(event_type, result.get('device_id'), result, scene_id=scene_id)
+            if event_type in {'illegal_parking', 'road_anomaly'} and result.get('status') == 'warning':
+                mysql_client.insert_alarm_record(event_type, result.get('device_id'), result, scene_id=scene_id)
         except Exception as e:
             print(f"推送结果失败: {str(e)}")
 

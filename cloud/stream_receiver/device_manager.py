@@ -6,6 +6,8 @@ from datetime import datetime
 from typing import Dict, Optional
 import threading
 
+from cloud.database import mysql_client
+
 
 class Device:
     """设备信息类"""
@@ -67,7 +69,11 @@ class DeviceManager:
         """初始化设备管理器"""
         self.devices: Dict[str, Device] = {}
         self.lock = threading.Lock()
-        print("设备管理器初始化完成")
+        self.db_enabled = mysql_client.check_connection(force=True)
+        if self.db_enabled:
+            print("设备管理器初始化完成（MySQL 已连接）")
+        else:
+            print(f"设备管理器初始化完成（MySQL 未连接，使用内存模式）: {mysql_client.get_last_error()}")
 
     def register_device(self, device_id: str, stream_url: str,
                        resolution: str, fps: int, scene_id: str,
@@ -106,6 +112,8 @@ class DeviceManager:
                 bitrate=bitrate
             )
             self.devices[device_id] = device
+            if self.db_enabled:
+                mysql_client.upsert_device(device)
             return True
 
     def unregister_device(self, device_id: str) -> bool:
@@ -121,6 +129,8 @@ class DeviceManager:
         with self.lock:
             if device_id in self.devices:
                 del self.devices[device_id]
+                if self.db_enabled:
+                    mysql_client.set_device_status(device_id, 'offline')
                 print(f"设备 {device_id} 已注销")
                 return True
             else:
@@ -164,6 +174,8 @@ class DeviceManager:
             device = self.devices.get(device_id)
             if device:
                 device.update_heartbeat()
+                if self.db_enabled:
+                    mysql_client.set_device_status(device_id, 'online', device.last_heartbeat)
                 return True
             return False
 
@@ -178,6 +190,8 @@ class DeviceManager:
             device = self.devices.get(device_id)
             if device:
                 device.status = "offline"
+                if self.db_enabled:
+                    mysql_client.set_device_status(device_id, 'offline')
                 print(f"设备 {device_id} 已离线")
 
 

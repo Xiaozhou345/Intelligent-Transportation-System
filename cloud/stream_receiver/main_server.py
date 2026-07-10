@@ -7,6 +7,7 @@ from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 from device_manager import DeviceManager
 from video_processor import VideoProcessor
+from cloud.database import mysql_client
 from datetime import datetime
 import os
 from pathlib import Path
@@ -214,11 +215,19 @@ def get_device(device_id):
 def health_check():
     """健康检查接口"""
     active_streams = video_processor.get_active_streams()
+    db_ok = mysql_client.check_connection()
     return jsonify({
         "status": "ok",
         "message": "云端服务运行正常",
         "active_devices": len(device_manager.get_all_devices()),
-        "active_streams": len(active_streams)
+        "active_streams": len(active_streams),
+        "database": {
+            "enabled": db_ok,
+            "host": mysql_client.DB_SETTINGS['host'],
+            "port": mysql_client.DB_SETTINGS['port'],
+            "name": mysql_client.DB_SETTINGS['database'],
+            "error": None if db_ok else mysql_client.get_last_error(),
+        },
     }), 200
 
 
