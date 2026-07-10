@@ -348,8 +348,8 @@ onUnmounted(() => {
       <div class="chart-wrapper">
         <div ref="chartRef" class="chart"></div>
         <div v-if="!normalizedRegions.length" class="empty-mask">
-          <strong>等待后端热力图数据</strong>
-          <span>收到 traffic_density.data.regions 后开始绘制</span>
+          <strong>等待热力图数据</strong>
+          <span>系统正在分析道路拥堵情况</span>
         </div>
       </div>
 

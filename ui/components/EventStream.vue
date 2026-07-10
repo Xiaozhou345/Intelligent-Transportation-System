@@ -49,6 +49,14 @@ const filteredEvents = computed(() => {
 const alarmCount = computed(() => props.events.filter(event => event.status === 'warning' || event.event_type === 'illegal_parking' || event.event_type === 'road_anomaly').length)
 const displayEvents = computed(() => filteredEvents.value.slice(0, 12))
 
+const getDeviceLabel = (deviceId) => {
+  if (!deviceId) return '云端服务器'
+  if (deviceId === 'cloud_server') return '云端服务器'
+  if (deviceId === 'frontend_console') return '前端控制台'
+  // 如果是设备ID，显示更友好的名称
+  return `设备 ${deviceId}`
+}
+
 const formatTime = (timestamp) => {
   if (!timestamp) return '-'
   const date = new Date(timestamp)
@@ -129,7 +137,7 @@ const getEventSummary = (event) => {
             <span class="event-time">{{ formatTime(event.timestamp) }}</span>
           </div>
           <div class="event-summary">{{ getEventSummary(event) }}</div>
-          <div class="event-device">{{ event.device_id || 'cloud_server' }}</div>
+          <div class="event-device">{{ getDeviceLabel(event.device_id) }}</div>
         </div>
       </div>
     </div>

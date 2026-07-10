@@ -915,7 +915,7 @@ onUnmounted(() => {
 }
 
 .status-label {
-  color: #93c5fd;
+  color: #7dd3fc;
   font-size: 13px;
 }
 
@@ -1080,7 +1080,7 @@ onUnmounted(() => {
 }
 
 .overview-card em {
-  color: #7dd3fc;
+  color: #0ea5e9;
   display: block;
   font-size: 11px;
   font-style: normal;
