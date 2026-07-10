@@ -528,6 +528,11 @@ class VideoProcessor:
             print(f"视频流处理结束: {device_id}")
 
     def _analyze_frame(self, device_id, frame, frame_count):
+        # 防御性检查：确保frame有效（虽然上层已检查ret，但额外保护避免异常）
+        if frame is None or frame.size == 0:
+            print(f"⚠️  帧 {frame_count} 无效（frame为空或size=0），跳过分析")
+            return
+
         timestamp = datetime.now().isoformat()
         state = self._get_or_create_runtime_state(device_id, frame.shape)
         state["processed_frames"] += 1
