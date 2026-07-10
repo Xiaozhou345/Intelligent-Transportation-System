@@ -776,8 +776,25 @@ class VideoProcessor:
         grid_counts = {}
 
         # 统计每辆车所在的网格
+        invalid_bbox_count = 0
         for tracked in tracked_vehicles:
-            anchor = self._bottom_center(tracked["bbox"])
+            bbox = tracked.get("bbox")
+            if not bbox or len(bbox) != 4:
+                invalid_bbox_count += 1
+                continue
+
+            # 验证bbox格式：[x1, y1, x2, y2]，确保x2>x1且y2>y1
+            x1, y1, x2, y2 = bbox
+            if x2 <= x1 or y2 <= y1:
+                invalid_bbox_count += 1
+                continue
+
+            # 验证bbox坐标在视频分辨率范围内
+            if x1 < 0 or y1 < 0 or x2 > width or y2 > height:
+                # 边界外的车辆（可能是跟踪器预测位置），跳过统计
+                continue
+
+            anchor = self._bottom_center(bbox)
             x, y = anchor
 
             # 计算车辆所在网格索引
@@ -788,6 +805,9 @@ class VideoProcessor:
             if 0 <= col < grid_cols and 0 <= row < grid_rows:
                 grid_key = (row, col)
                 grid_counts[grid_key] = grid_counts.get(grid_key, 0) + 1
+
+        if invalid_bbox_count > 0:
+            print(f"⚠️  跳过 {invalid_bbox_count} 个无效bbox（格式错误或坐标异常）")
 
         # 只发送有车辆的网格（减少数据量）
         if not grid_counts:
@@ -805,11 +825,18 @@ class VideoProcessor:
             x2 = x1 + cell_width
             y2 = y1 + cell_height
 
+            # 验证坐标合理性（防止浮点运算误差导致越界）
+            x1 = max(0, min(x1, width))
+            y1 = max(0, min(y1, height))
+            x2 = max(0, min(x2, width))
+            y2 = max(0, min(y2, height))
+
+            # 取整以避免前端渲染精度问题
             polygon = [
-                [x1, y1],
-                [x2, y1],
-                [x2, y2],
-                [x1, y2]
+                [int(x1), int(y1)],
+                [int(x2), int(y1)],
+                [int(x2), int(y2)],
+                [int(x1), int(y2)]
             ]
 
             # 判断拥堵状态
