@@ -703,16 +703,21 @@ class VideoProcessor:
                     road_mask=road_mask,
                     vehicle_bboxes=vehicle_bboxes,
                 )
+
+                # 使用anomaly_processor内部的真实计数器，而非video_processor的统计
+                # 这确保统计与实际MOG2背景模型的帧数一致
+                actual_background_frames = self.anomaly_processor.background_frames
+
                 if learned:
-                    state["anomaly_background_frames"] = state.get("anomaly_background_frames", 0) + 1
+                    # state中的计数器仅用于跳过帧统计
+                    state["anomaly_background_frames"] = actual_background_frames
                 else:
                     state["anomaly_background_skipped_frames"] = state.get("anomaly_background_skipped_frames", 0) + 1
 
-                background_frames = state.get("anomaly_background_frames", 0)
                 skipped_frames = state.get("anomaly_background_skipped_frames", 0)
                 should_report = (
-                    background_frames == 1
-                    or (learned and background_frames % 10 == 0)
+                    actual_background_frames == 1
+                    or (learned and actual_background_frames % 10 == 0)
                     or (not learned and skipped_frames % 5 == 0)
                 )
                 if should_report:
@@ -722,11 +727,9 @@ class VideoProcessor:
                         "device_id": device_id,
                         "status": "learning" if learned else "skipped",
                         "data": {
-                            "mode": "background_learning",
-                            "background_frames": background_frames,
+                            "background_frames": actual_background_frames,
                             "skipped_frames": skipped_frames,
-                            "vehicle_masks": len(vehicle_bboxes),
-                            "reason": None if learned else "vehicle_mask_too_large_or_invalid_frame",
+                            "total_processed": actual_background_frames + skipped_frames,
                         },
                     })
                     print(
@@ -992,13 +995,14 @@ class VideoProcessor:
                 "enabled": self.anomaly_processor is not None,
             }
 
+        # 使用anomaly_processor内部的真实计数器，确保准确性
+        actual_background_frames = self.anomaly_processor.background_frames if self.anomaly_processor else 0
+
         return {
             "status": "success",
             "device_id": device_id,
             "mode": self.runtime_defaults.get("anomaly_mode", "detecting"),
-            "background_frames": max(
-                [state.get("anomaly_background_frames", 0) for state in self.runtime_state.values()] or [0]
-            ),
+            "background_frames": actual_background_frames,
             "skipped_frames": sum(
                 state.get("anomaly_background_skipped_frames", 0) for state in self.runtime_state.values()
             ),
