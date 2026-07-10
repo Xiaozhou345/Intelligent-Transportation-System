@@ -245,7 +245,9 @@ class VideoProcessor:
             state = {
                 "tracker": VehicleTracker(
                     max_time_lost=int(os.getenv("ITS_TRACKER_MAX_LOST", "45")),
-                    track_thresh=float(os.getenv("ITS_TRACKER_TRACK_THRESH", "0.40")),
+                    # track_thresh应 <= vehicle_conf，确保检测器输出能被跟踪器接受
+                    # 使用稍低的阈值，允许跟踪器处理置信度略低但时序连续的检测
+                    track_thresh=float(os.getenv("ITS_TRACKER_TRACK_THRESH", "0.35")),
                     match_thresh=float(os.getenv("ITS_TRACKER_MATCH_THRESH", "0.30")),
                 ),
                 "parking_monitor": IllegalParkingMonitor(
