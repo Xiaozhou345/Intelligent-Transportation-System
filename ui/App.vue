@@ -329,8 +329,19 @@ const buildOverlayBoxes = (overlay) => {
         color
       }))
   }
+  const normalizePolygons = (items, color, fillColor, fallbackLabel) => {
+    return (Array.isArray(items) ? items : [])
+      .filter(item => Array.isArray(item.polygon) && item.polygon.length >= 3)
+      .map(item => ({
+        polygon: item.polygon,
+        label: item.label || item.name || fallbackLabel,
+        color,
+        fillColor
+      }))
+  }
 
   return [
+    ...normalizePolygons(data.no_parking_zones, '#f97316', 'rgba(249, 115, 22, 0.16)', 'no parking'),
     ...normalize(data.vehicles, '#38bdf8', 'vehicle'),
     ...normalize(data.plates, '#22c55e', 'plate'),
     ...normalize(data.illegal_parking, '#ef4444', 'illegal'),
@@ -510,7 +521,21 @@ onUnmounted(() => {
       </div>
     </header>
 
-    <main class="main-content">
+    <main v-if="!currentUser" class="login-shell">
+      <section class="login-hero">
+        <div class="login-copy">
+          <span class="login-eyebrow">访问控制</span>
+          <h2>登录后进入视频监控台</h2>
+          <p>未登录状态不再直接展示实时视频画面。请选择身份进入系统，访客只能查看数据，值班员可处置告警，管理员可修改配置。</p>
+        </div>
+        <div class="login-card">
+          <h3>用户登录</h3>
+          <UserSessionPanel embedded @login="handleLogin" />
+        </div>
+      </section>
+    </main>
+
+    <main v-else class="main-content">
       <ElAlert
         v-if="showError"
         title="连接错误"
@@ -519,15 +544,6 @@ onUnmounted(() => {
         show-icon
         :closable="false"
       />
-      <ElAlert
-        v-if="!currentUser"
-        title="请先登录"
-        description="未登录时可以查看大屏，但不能执行场景切换、配置变更和告警处置。"
-        type="warning"
-        show-icon
-        :closable="false"
-      />
-
       <section class="scene-tabs-panel">
         <ElTabs v-model="activeScene" class="scene-tabs" @tab-change="handleSceneChange">
           <ElTabPane v-for="scene in sceneTabs" :key="scene.value" :label="scene.label" :name="scene.value" />
@@ -809,6 +825,73 @@ onUnmounted(() => {
   padding: 0 20px 24px;
   position: relative;
   z-index: 1;
+}
+
+.login-shell {
+  align-items: center;
+  display: flex;
+  min-height: calc(100vh - 88px);
+  padding: 32px 20px;
+  position: relative;
+  z-index: 1;
+}
+
+.login-hero {
+  align-items: stretch;
+  display: grid;
+  gap: 24px;
+  grid-template-columns: minmax(0, 1fr) 420px;
+  margin: 0 auto;
+  max-width: 1120px;
+  width: 100%;
+}
+
+.login-copy {
+  background: linear-gradient(135deg, rgba(15, 23, 42, 0.82), rgba(8, 47, 73, 0.72));
+  border: 1px solid rgba(56, 189, 248, 0.24);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 300px;
+  padding: 34px;
+  box-shadow: 0 20px 48px rgba(2, 8, 23, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.login-eyebrow {
+  color: #67e8f9;
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 12px;
+}
+
+.login-copy h2 {
+  color: #f8fafc;
+  font-size: 30px;
+  line-height: 1.2;
+  margin: 0;
+}
+
+.login-copy p {
+  color: #bae6fd;
+  font-size: 15px;
+  line-height: 1.8;
+  margin: 16px 0 0;
+  max-width: 620px;
+}
+
+.login-card {
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.94), rgba(8, 18, 33, 0.94));
+  border: 1px solid rgba(56, 189, 248, 0.28);
+  border-radius: 8px;
+  padding: 28px;
+  box-shadow: 0 20px 48px rgba(2, 8, 23, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.login-card h3 {
+  color: #e0f2fe;
+  font-size: 20px;
+  margin: 0 0 20px;
 }
 
 .scene-tabs-panel {
@@ -1130,7 +1213,8 @@ onUnmounted(() => {
   .command-grid,
   .overview-strip,
   .bottom-grid,
-  .right-rail {
+  .right-rail,
+  .login-hero {
     grid-template-columns: 1fr;
   }
 
@@ -1142,7 +1226,8 @@ onUnmounted(() => {
 
 @media (max-width: 720px) {
   .header,
-  .main-content {
+  .main-content,
+  .login-shell {
     padding-left: 12px;
     padding-right: 12px;
   }
@@ -1150,6 +1235,15 @@ onUnmounted(() => {
   .header-right {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .login-copy,
+  .login-card {
+    padding: 22px;
+  }
+
+  .login-copy h2 {
+    font-size: 24px;
   }
 }
 </style>

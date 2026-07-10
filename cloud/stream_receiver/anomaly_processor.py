@@ -64,11 +64,15 @@ class RoadAnomalyProcessor:
 
         print("道路异常处理器初始化完成")
 
-    def update_background(self, frame, road_mask=None):
+    def update_background(self, frame, road_mask=None, vehicle_bboxes=None):
         """Feed clean static-camera frames into the background model."""
         if road_mask is None and self.drivable_segmenter:
             road_mask = self.drivable_segmenter.predict_mask(frame)
-        self.detector.update_background(frame=frame, road_mask=road_mask)
+        self.detector.update_background(
+            frame=frame,
+            road_mask=road_mask,
+            vehicle_bboxes=vehicle_bboxes,
+        )
 
     def process_frame(self, device_id, frame, vehicle_bboxes=None, timestamp=None, road_mask=None):
         """

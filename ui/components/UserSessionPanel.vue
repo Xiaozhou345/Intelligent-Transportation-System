@@ -10,6 +10,10 @@ const props = defineProps({
   visible: {
     type: Boolean,
     default: false
+  },
+  embedded: {
+    type: Boolean,
+    default: false
   }
 })
 
@@ -40,7 +44,24 @@ const closeDialog = () => {
 </script>
 
 <template>
-  <div class="user-session">
+  <div :class="['user-session', { 'user-session-embedded': embedded }]">
+    <template v-if="embedded">
+      <ElForm label-position="top" class="embedded-login-form">
+        <ElFormItem label="用户名">
+          <ElInput v-model="form.username" maxlength="24" />
+        </ElFormItem>
+        <ElFormItem label="角色">
+          <ElSelect v-model="form.role" class="role-select">
+            <ElOption label="管理员" value="admin" />
+            <ElOption label="值班员" value="operator" />
+            <ElOption label="访客" value="viewer" />
+          </ElSelect>
+        </ElFormItem>
+        <ElButton type="primary" class="login-submit" @click="submitLogin">进入视频监控台</ElButton>
+      </ElForm>
+    </template>
+
+    <template v-else>
     <template v-if="user">
       <div class="user-meta">
         <span>{{ user.username }}</span>
@@ -56,6 +77,10 @@ const closeDialog = () => {
       :model-value="visible"
       title="用户登录"
       width="420px"
+      append-to-body
+      modal-class="login-dialog-overlay"
+      class="login-dialog"
+      :z-index="4000"
       :close-on-click-modal="false"
       @close="closeDialog"
     >
@@ -76,6 +101,7 @@ const closeDialog = () => {
         <ElButton type="primary" @click="submitLogin">进入系统</ElButton>
       </template>
     </ElDialog>
+    </template>
   </div>
 </template>
 
@@ -101,5 +127,42 @@ const closeDialog = () => {
 
 .role-select {
   width: 100%;
+}
+
+.user-session-embedded {
+  display: block;
+  width: 100%;
+}
+
+.embedded-login-form {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+}
+
+.login-submit {
+  height: 42px;
+  margin-top: 4px;
+  width: 100%;
+}
+
+:global(.login-dialog-overlay) {
+  z-index: 4000 !important;
+}
+
+:global(.login-dialog) {
+  z-index: 4001 !important;
+}
+
+:global(.login-dialog.el-dialog) {
+  background: #0f172a;
+  border: 1px solid rgba(56, 189, 248, 0.28);
+  border-radius: 8px;
+  box-shadow: 0 26px 70px rgba(2, 8, 23, 0.72);
+}
+
+:global(.login-dialog .el-dialog__title),
+:global(.login-dialog .el-form-item__label) {
+  color: #e0f2fe;
 }
 </style>

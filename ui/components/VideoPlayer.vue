@@ -322,7 +322,41 @@ const _drawBoxesInternal = (boxes, sourceSize = null) => {
   const scaleY = viewport.height * dpr / videoHeight
   
   boxes.forEach(box => {
-    const { x1, y1, x2, y2, label, color } = box
+    const { x1, y1, x2, y2, label, color, polygon, fillColor } = box
+
+    if (Array.isArray(polygon) && polygon.length >= 3) {
+      const points = polygon.map(([x, y]) => [
+        offsetX + x * scaleX,
+        offsetY + y * scaleY
+      ])
+      ctx.save()
+      ctx.beginPath()
+      ctx.moveTo(points[0][0], points[0][1])
+      points.slice(1).forEach(([px, py]) => ctx.lineTo(px, py))
+      ctx.closePath()
+      ctx.fillStyle = fillColor || 'rgba(239, 68, 68, 0.16)'
+      ctx.strokeStyle = color || '#ef4444'
+      ctx.lineWidth = 2 * dpr
+      ctx.fill()
+      ctx.stroke()
+
+      if (label) {
+        ctx.font = `${14 * dpr}px sans-serif`
+        ctx.textBaseline = 'top'
+        const labelX = Math.min(...points.map(point => point[0]))
+        const labelY = Math.min(...points.map(point => point[1]))
+        const labelWidth = ctx.measureText(label).width
+        const labelHeight = 18 * dpr
+        ctx.fillStyle = color || '#ef4444'
+        ctx.fillRect(labelX, Math.max(offsetY, labelY - labelHeight), labelWidth + 8 * dpr, labelHeight)
+        ctx.fillStyle = '#ffffff'
+        ctx.fillText(label, labelX + 4 * dpr, Math.max(offsetY, labelY - labelHeight) + 2 * dpr)
+      }
+
+      ctx.restore()
+      return
+    }
+
     const boxX = offsetX + x1 * scaleX
     const boxY = offsetY + y1 * scaleY
     const boxWidth = (x2 - x1) * scaleX

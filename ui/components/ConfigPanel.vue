@@ -66,6 +66,23 @@ const handleStopAnalysis = () => {
   ElMessage.success('分析已停止')
 }
 
+const handleAnomalyBackgroundStart = () => {
+  config.scene = 'road_anomaly'
+  sendCommand('anomaly_background_start', { reset: true })
+  ElMessage.success('已开始学习正常道路背景')
+}
+
+const handleAnomalyDetectionStart = () => {
+  config.scene = 'road_anomaly'
+  sendCommand('anomaly_detection_start')
+  ElMessage.success('已切换到异常检测模式')
+}
+
+const handleAnomalyReset = () => {
+  sendCommand('anomaly_reset')
+  ElMessage.success('异常检测背景已重置')
+}
+
 const handleWhitelistUpdate = () => {
   if (!whitelistForm.plate || !whitelistForm.owner) {
     ElMessage.warning('请填写车牌号和所属人')
@@ -130,6 +147,14 @@ const handleWhitelistUpdate = () => {
         <div class="action-buttons">
           <ElButton type="primary" @click="handleStartAnalysis">开始分析</ElButton>
           <ElButton @click="handleStopAnalysis">停止分析</ElButton>
+        </div>
+      </ElFormItem>
+
+      <ElFormItem label="异常检测标定">
+        <div class="anomaly-actions">
+          <ElButton type="warning" @click="handleAnomalyBackgroundStart">初始化背景</ElButton>
+          <ElButton type="danger" @click="handleAnomalyDetectionStart">开始检测</ElButton>
+          <ElButton @click="handleAnomalyReset">重新标定</ElButton>
         </div>
       </ElFormItem>
       
@@ -212,5 +237,11 @@ const handleWhitelistUpdate = () => {
 .action-buttons {
   display: flex;
   gap: 12px;
+}
+
+.anomaly-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 </style>

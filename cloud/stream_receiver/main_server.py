@@ -291,6 +291,42 @@ def upload_video_segment():
         }), 500
 
 
+@app.route('/api/anomaly/background/start', methods=['POST'])
+def start_anomaly_background_learning():
+    """手动进入道路异常背景学习模式。"""
+    data = request.json or {}
+    result = video_processor.start_anomaly_background_learning(
+        device_id=data.get('device_id'),
+        reset=data.get('reset', True),
+    )
+    status_code = 200 if result.get("status") == "success" else 503
+    return jsonify(result), status_code
+
+
+@app.route('/api/anomaly/detection/start', methods=['POST'])
+def start_anomaly_detection():
+    """结束背景学习并进入道路异常检测模式。"""
+    data = request.json or {}
+    result = video_processor.start_anomaly_detection(device_id=data.get('device_id'))
+    status_code = 200 if result.get("status") == "success" else 503
+    return jsonify(result), status_code
+
+
+@app.route('/api/anomaly/reset', methods=['POST'])
+def reset_anomaly_background():
+    """重置道路异常背景模型。"""
+    data = request.json or {}
+    result = video_processor.reset_anomaly_background(device_id=data.get('device_id'))
+    status_code = 200 if result.get("status") == "success" else 503
+    return jsonify(result), status_code
+
+
+@app.route('/api/anomaly/status', methods=['GET'])
+def get_anomaly_status():
+    """获取道路异常检测当前模式。"""
+    return jsonify(video_processor.get_anomaly_status(device_id=request.args.get('device_id'))), 200
+
+
 # ==================== WebSocket 事件处理 ====================
 
 @socketio.on('connect')
@@ -338,6 +374,28 @@ def handle_client_command(data):
         confidence = data.get('confidence', 0.45)
         video_processor.set_vehicle_confidence(confidence)
         emit('confidence_updated', {'confidence': confidence})
+        return
+
+    if command == 'anomaly_background_start':
+        result = video_processor.start_anomaly_background_learning(
+            device_id=device_id,
+            reset=data.get('reset', True),
+        )
+        emit('anomaly_mode_updated', result)
+        return
+
+    if command == 'anomaly_detection_start':
+        result = video_processor.start_anomaly_detection(device_id=device_id)
+        emit('anomaly_mode_updated', result)
+        return
+
+    if command == 'anomaly_reset':
+        result = video_processor.reset_anomaly_background(device_id=device_id)
+        emit('anomaly_mode_updated', result)
+        return
+
+    if command == 'anomaly_status':
+        emit('anomaly_mode_updated', video_processor.get_anomaly_status(device_id=device_id))
         return
 
     if command == 'start_analysis':
