@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onUnmounted, watch, reactive } from 'vue'
+import { computed, ref, onMounted, onUnmounted, watch, reactive } from 'vue'
 import * as echarts from 'echarts'
 import { ElTag } from 'element-plus'
 
@@ -38,15 +38,18 @@ let cpuChartInstance = null
 let gpuChartInstance = null
 let memoryChartInstance = null
 
-let mockTimer = null
 let disconnectTimer = null
 
 const localData = reactive({
-  cpu_usage: 50,
-  gpu_usage: 40,
-  memory_usage: 60,
-  stream_status: 'streaming',
-  bitrate: 2048
+  cpu_usage: 0,
+  gpu_usage: 0,
+  memory_usage: 0,
+  stream_status: 'disconnected',
+  bitrate: null
+})
+
+const hasSystemData = computed(() => {
+  return Object.keys(props.systemData || {}).length > 0
 })
 
 const getStatusText = (status) => {
@@ -155,24 +158,6 @@ const updateCharts = () => {
   memoryChartInstance?.setOption(createGaugeOption(localData.memory_usage, '内存'))
 }
 
-const startMockData = () => {
-  stopMockData()
-  mockTimer = setInterval(() => {
-    localData.cpu_usage = Math.round(30 + Math.random() * 50)
-    localData.gpu_usage = Math.round(20 + Math.random() * 70)
-    localData.memory_usage = Math.round(40 + Math.random() * 30)
-    localData.bitrate = Math.round(1024 + Math.random() * 3072)
-    updateCharts()
-  }, 2000)
-}
-
-const stopMockData = () => {
-  if (mockTimer) {
-    clearInterval(mockTimer)
-    mockTimer = null
-  }
-}
-
 const resetDisconnectTimer = () => {
   if (disconnectTimer) {
     clearTimeout(disconnectTimer)
@@ -183,7 +168,7 @@ const resetDisconnectTimer = () => {
 }
 
 watch(() => props.systemData, (newData) => {
-  if (newData) {
+  if (newData && Object.keys(newData).length > 0) {
     if (newData.cpu_usage !== undefined) {
       localData.cpu_usage = newData.cpu_usage
     }
@@ -201,13 +186,11 @@ watch(() => props.systemData, (newData) => {
     }
     updateCharts()
     resetDisconnectTimer()
-    stopMockData()
   }
 }, { deep: true })
 
 onMounted(() => {
   initCharts()
-  startMockData()
 })
 
 onUnmounted(() => {
@@ -215,7 +198,6 @@ onUnmounted(() => {
   cpuChartInstance?.dispose()
   gpuChartInstance?.dispose()
   memoryChartInstance?.dispose()
-  stopMockData()
   if (disconnectTimer) {
     clearTimeout(disconnectTimer)
   }
@@ -225,6 +207,9 @@ onUnmounted(() => {
 <template>
   <div class="system-monitor">
     <h3>系统资源监控</h3>
+    <div v-if="!hasSystemData" class="monitor-empty">
+      等待后端 system_status 数据
+    </div>
     
     <div class="gauges-container">
       <div class="gauge-item">
@@ -247,7 +232,7 @@ onUnmounted(() => {
       </div>
       <div class="bitrate">
         <span class="label">传输速率：</span>
-        <span class="value">{{ localData.bitrate }} kbps</span>
+        <span class="value">{{ localData.bitrate ?? '-' }} kbps</span>
       </div>
     </div>
 
@@ -285,6 +270,17 @@ onUnmounted(() => {
   font-size: 16px;
   color: #e0f2fe;
   margin-bottom: 16px;
+}
+
+.monitor-empty {
+  background: rgba(14, 165, 233, 0.1);
+  border: 1px solid rgba(56, 189, 248, 0.14);
+  border-radius: 8px;
+  color: #93c5fd;
+  font-size: 13px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  text-align: center;
 }
 
 .gauges-container {

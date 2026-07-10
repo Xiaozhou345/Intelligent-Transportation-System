@@ -4,11 +4,7 @@ import { ElButton, ElDialog, ElForm, ElFormItem, ElInput, ElMessage, ElTable, El
 
 const emit = defineEmits(['send-command'])
 
-const whitelist = ref([
-  { plate: '京A12345', owner: '校内车辆', role: 'faculty', status: 'enabled' },
-  { plate: '京B67890', owner: '后勤车辆', role: 'service', status: 'enabled' },
-  { plate: '沪C11223', owner: '临时访客', role: 'visitor', status: 'disabled' }
-])
+const whitelist = ref([])
 
 const showDialog = ref(false)
 const form = reactive({
@@ -80,6 +76,9 @@ const toggleStatus = (row) => {
         </template>
       </ElTableColumn>
     </ElTable>
+    <div v-if="whitelist.length === 0" class="empty-tip">
+      暂无白名单记录
+    </div>
 
     <ElDialog title="新增白名单车辆" v-model="showDialog" width="420px">
       <ElForm :model="form" label-width="80px">
@@ -120,5 +119,12 @@ const toggleStatus = (row) => {
 .section-header h2 {
   color: #e0f2fe;
   font-size: 17px;
+}
+
+.empty-tip {
+  color: #93c5fd;
+  font-size: 14px;
+  padding: 18px;
+  text-align: center;
 }
 </style>

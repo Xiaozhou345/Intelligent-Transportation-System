@@ -42,13 +42,9 @@ const isPublisherMode = window.location.pathname === '/publish' || new URLSearch
 const latestPlateResult = ref(null)
 const plateRecords = ref([])
 const vehicleDetectionRecords = ref([])
+const latestTrafficDensityAt = ref('')
 
-const trafficDensityData = ref([
-  { region_id: 'road_A', vehicle_count: 2, status: 'smooth', color: 'green' },
-  { region_id: 'road_B', vehicle_count: 4, status: 'slow', color: 'yellow' },
-  { region_id: 'road_C', vehicle_count: 7, status: 'congested', color: 'red' },
-  { region_id: 'road_D', vehicle_count: 3, status: 'slow', color: 'yellow' }
-])
+const trafficDensityData = ref([])
 
 const illegalParkingRecords = ref([])
 const roadAnomalyRecords = ref([])
@@ -64,29 +60,7 @@ const dashboardStats = reactive({
   roadAnomalyCount: 0
 })
 
-const deviceList = ref([
-  {
-    device_id: 'mobile_001',
-    device_type: 'huawei_tablet',
-    scene_id: 'scene_704',
-    status: 'online',
-    last_heartbeat: new Date(Date.now() - 30000).toISOString()
-  },
-  {
-    device_id: 'mobile_002',
-    device_type: 'iphone',
-    scene_id: 'scene_705',
-    status: 'offline',
-    last_heartbeat: new Date(Date.now() - 7200000).toISOString()
-  },
-  {
-    device_id: 'camera_001',
-    device_type: 'ip_camera',
-    scene_id: 'scene_704',
-    status: 'online',
-    last_heartbeat: new Date(Date.now() - 60000).toISOString()
-  }
-])
+const deviceList = ref([])
 
 const sceneTabs = [
   { label: '车辆检测', value: 'vehicle_detection', model: 'YOLOv11s' },
@@ -176,7 +150,7 @@ const currentDetectionCount = computed(() => {
   if (activeScene.value === 'plate_recognition') return plateRecords.value.length
   if (activeScene.value === 'illegal_parking') return illegalParkingRecords.value.length
   if (activeScene.value === 'road_anomaly') return roadAnomalyRecords.value.length
-  return trafficDensityData.value.reduce((sum, item) => sum + (item.vehicle_count || 0), 0)
+  return trafficDensityData.value.reduce((sum, item) => sum + (Number(item.vehicle_count) || 0), 0)
 })
 
 const addEventRecord = (event) => {
@@ -278,9 +252,13 @@ const applyAlarmStatus = (payload) => {
 }
 
 const updateLatency = (timestamp) => {
+  if (!timestamp) {
+    latestLatency.value = 0
+    return
+  }
   const eventTime = timestamp ? new Date(timestamp).getTime() : Date.now()
   latestLatency.value = Number.isNaN(eventTime)
-    ? Math.round(60 + Math.random() * 80)
+    ? 0
     : Math.max(0, Math.min(999, Date.now() - eventTime))
 }
 
@@ -310,7 +288,9 @@ const buildVehicleBoxes = (records) => {
       y1: record.bbox[1],
       x2: record.bbox[2],
       y2: record.bbox[3],
-      label: `${record.data?.vehicle_type || record.data?.plate_number || 'vehicle'} ${Math.round((record.data?.confidence || 0.86) * 100)}%`,
+      label: record.data?.confidence === undefined
+        ? (record.data?.vehicle_type || record.data?.plate_number || 'vehicle')
+        : `${record.data?.vehicle_type || record.data?.plate_number || 'vehicle'} ${Math.round(record.data.confidence * 100)}%`,
       color: index === 0 ? '#ef4444' : '#f59e0b'
     }))
 }
@@ -365,10 +345,12 @@ const handleVehicleDetection = (data) => {
 }
 
 const handleTrafficDensity = (data) => {
-  if (data.data?.regions) {
-    trafficDensityData.value = data.data.regions
-    const totalVehicles = data.data.regions.reduce((sum, r) => sum + (r.vehicle_count || 0), 0)
-    const avgVehicles = totalVehicles / data.data.regions.length
+  const regions = data.data?.regions || data.regions
+  if (Array.isArray(regions)) {
+    trafficDensityData.value = regions
+    latestTrafficDensityAt.value = data.timestamp || new Date().toISOString()
+    const totalVehicles = regions.reduce((sum, r) => sum + (Number(r.vehicle_count) || 0), 0)
+    const avgVehicles = regions.length ? totalVehicles / regions.length : 0
     dashboardStats.congestionIndex = Math.round(Math.min(100, avgVehicles * 15))
   }
 }
@@ -444,9 +426,6 @@ const routeEvent = (data) => {
 onMounted(() => {
   if (isPublisherMode) return
   loadSavedUser()
-  if (!currentUser.value) {
-    showLoginDialog.value = true
-  }
 
   clockTimer = setInterval(() => {
     currentTime.value = new Date()
@@ -510,6 +489,7 @@ onUnmounted(() => {
             </ElTag>
           </div>
           <UserSessionPanel
+            v-if="currentUser"
             v-model:visible="showLoginDialog"
             :user="currentUser"
             @login="handleLogin"
@@ -650,7 +630,11 @@ onUnmounted(() => {
             />
           </div>
 
-          <TrafficHeatmap v-if="activeScene === 'traffic_density'" :data="trafficDensityData" />
+          <TrafficHeatmap
+            v-if="activeScene === 'traffic_density'"
+            :data="trafficDensityData"
+            :updated-at="latestTrafficDensityAt"
+          />
           <VehicleDetectionPanel v-else-if="activeScene === 'vehicle_detection'" :records="vehicleDetectionRecords" />
           <PlateResult
             v-else-if="activeScene === 'plate_recognition'"

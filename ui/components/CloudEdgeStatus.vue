@@ -37,7 +37,7 @@ const props = defineProps({
 })
 
 const onlineDevices = computed(() => props.devices.filter(device => device.status === 'online').length)
-const edgeDevice = computed(() => props.devices.find(device => device.status === 'online') || props.devices[0])
+const edgeDevice = computed(() => props.devices.find(device => device.status === 'online') || props.devices[0] || null)
 
 const streamStatus = computed(() => {
   if (props.systemData.stream_status === 'streaming') return '推流中'
@@ -72,7 +72,7 @@ const shortUrl = (url) => {
       <div class="node">
         <div class="node-icon">EDGE</div>
         <div class="node-title">边端设备</div>
-        <div class="node-value">{{ edgeDevice?.device_id || 'mobile_001' }}</div>
+        <div class="node-value">{{ edgeDevice?.device_id || '未接入' }}</div>
         <div class="node-meta">{{ onlineDevices }}/{{ devices.length }} 在线</div>
       </div>
       <div class="flow-line"></div>

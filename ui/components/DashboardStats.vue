@@ -35,23 +35,14 @@ const generateTimeLabels = () => {
   return labels
 }
 
-const generateTrendData = () => {
-  const data = []
-  for (let i = 0; i < 12; i++) {
-    data.push(Math.round(20 + Math.random() * 60))
-  }
-  return data
-}
-
 const trendData = ref({
   timeLabels: generateTimeLabels(),
-  values: generateTrendData()
+  values: Array(12).fill(0)
 })
 
 const distributionData = ref({
-  roads: ['road_A', 'road_B', 'road_C'],
-  illegalParking: [12, 8, 15],
-  roadAnomaly: [5, 9, 7]
+  categories: ['违规停车', '道路异常'],
+  values: [0, 0]
 })
 
 const initTrendChart = () => {
@@ -156,20 +147,12 @@ const updateDistributionChart = () => {
         type: 'shadow'
       },
       formatter: (params) => {
-        let result = `<div style="padding: 8px;"><strong>${params[0].name}</strong><br/>`
-        params.forEach(item => {
-          result += `${item.seriesName}: <strong>${item.value}</strong><br/>`
-        })
-        result += '</div>'
-        return result
+        const item = params[0]
+        return `<div style="padding: 8px;"><strong>${item.name}</strong><br/>次数: <strong>${item.value}</strong></div>`
       }
     },
     legend: {
-      data: ['违规停车', '道路异常'],
-      top: 0,
-      textStyle: {
-        color: '#bae6fd'
-      }
+      show: false
     },
     grid: {
       left: '3%',
@@ -180,7 +163,7 @@ const updateDistributionChart = () => {
     },
     xAxis: {
       type: 'category',
-      data: distributionData.value.roads,
+      data: distributionData.value.categories,
       axisLine: {
         lineStyle: {
           color: 'rgba(125, 211, 252, 0.35)'
@@ -205,20 +188,11 @@ const updateDistributionChart = () => {
     },
     series: [
       {
-        name: '违规停车',
+        name: '事件数量',
         type: 'bar',
-        data: distributionData.value.illegalParking,
+        data: distributionData.value.values,
         itemStyle: {
-          color: '#f59e0b',
-          borderRadius: [4, 4, 0, 0]
-        }
-      },
-      {
-        name: '道路异常',
-        type: 'bar',
-        data: distributionData.value.roadAnomaly,
-        itemStyle: {
-          color: '#ef4444',
+          color: (params) => params.dataIndex === 0 ? '#f59e0b' : '#ef4444',
           borderRadius: [4, 4, 0, 0]
         }
       }
@@ -235,7 +209,7 @@ const addTrendDataPoint = () => {
   trendData.value.timeLabels.push(`${hours}:${minutes}`)
   trendData.value.timeLabels.shift()
   
-  const newIndex = stats.congestionIndex || Math.round(20 + Math.random() * 60)
+  const newIndex = stats.congestionIndex || 0
   trendData.value.values.push(newIndex)
   trendData.value.values.shift()
   
@@ -261,6 +235,13 @@ watch(() => props.statsData, (newData) => {
     if (newData.roadAnomalyCount !== undefined) {
       stats.roadAnomalyCount = newData.roadAnomalyCount
     }
+    trendData.value.values[trendData.value.values.length - 1] = stats.congestionIndex || 0
+    distributionData.value.values = [
+      stats.illegalParkingCount,
+      stats.roadAnomalyCount
+    ]
+    updateTrendChart()
+    updateDistributionChart()
   }
 }, { deep: true, immediate: true })
 
