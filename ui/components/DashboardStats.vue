@@ -374,9 +374,10 @@ export default {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 24px;
+  font-size: 22px;
   background: rgba(8, 18, 33, 0.72);
   box-shadow: inset 0 0 18px rgba(34, 211, 238, 0.12), 0 0 16px rgba(14, 165, 233, 0.18);
+  line-height: 1;
 }
 
 .stat-info {

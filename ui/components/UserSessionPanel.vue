@@ -75,7 +75,7 @@ const closeDialog = () => {
           {{ roleMap[user.role]?.label || user.role }}
         </ElTag>
       </div>
-      <ElButton size="large" plain @click="emit('logout')">退出</ElButton>
+      <ElButton size="large" plain style="min-height: 40px; border-radius: 8px;" @click="emit('logout')">退出</ElButton>
     </template>
     <ElButton v-else size="small" type="primary" @click="emit('update:visible', true)">登录</ElButton>
 

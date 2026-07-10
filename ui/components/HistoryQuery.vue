@@ -139,10 +139,10 @@ const formatDetail = (event) => {
     </div>
 
     <div class="filters">
-      <ElSelect v-model="filters.eventType" size="small" class="filter-control">
+      <ElSelect v-model="filters.eventType" size="small" class="filter-control" placeholder="事件类型">
         <ElOption v-for="option in eventOptions" :key="option.value" :label="option.label" :value="option.value" />
       </ElSelect>
-      <ElSelect v-model="filters.status" size="small" class="filter-control">
+      <ElSelect v-model="filters.status" size="small" class="filter-control" placeholder="事件状态">
         <ElOption v-for="option in statusOptions" :key="option.value" :label="option.label" :value="option.value" />
       </ElSelect>
       <ElInput v-model="filters.keyword" size="small" placeholder="车牌、设备、车道关键字" clearable />

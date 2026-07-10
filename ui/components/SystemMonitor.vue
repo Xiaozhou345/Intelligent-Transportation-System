@@ -112,13 +112,13 @@ const createGaugeOption = (value, title) => {
         valueAnimation: true,
         formatter: '{value}%',
         color: '#e0f2fe',
-        fontSize: 16,
+        fontSize: 18,
         fontWeight: 'bold',
-        offsetCenter: [0, '70%']
+        offsetCenter: [0, '60%']
       },
       title: {
-        offsetCenter: [0, '90%'],
-        fontSize: 13,
+        offsetCenter: [0, '85%'],
+        fontSize: 14,
         color: '#93c5fd'
       },
       data: [{
@@ -208,7 +208,7 @@ onUnmounted(() => {
   <div class="system-monitor">
     <h3>系统资源监控</h3>
     <div v-if="!hasSystemData" class="monitor-empty">
-      等待后端 system_status 数据
+      正在获取系统资源数据
     </div>
     
     <div class="gauges-container">
@@ -285,19 +285,23 @@ onUnmounted(() => {
 
 .gauges-container {
   display: flex;
-  justify-content: space-around;
+  justify-content: center;
   align-items: center;
+  gap: 20px;
+  padding: 0 20px;
 }
 
 .gauge-item {
-  flex: 1;
+  flex: 0 0 auto;
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
 }
 
 .gauge-chart {
-  width: 120px;
-  height: 120px;
+  width: 140px;
+  height: 140px;
 }
 
 .stream-info {
