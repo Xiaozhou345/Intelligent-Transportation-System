@@ -498,7 +498,23 @@ class VideoProcessor:
 
             print(f"成功连接视频流: {device_id}")
 
+            # 缓冲区清理策略：定期检查并跳过积压的旧帧，确保读取最新帧
+            # 这对于实时流（RTSP/RTMP）至关重要，可大幅降低延迟
+            last_buffer_clear_time = time.time()
+            buffer_clear_interval = 2.0  # 每2秒清理一次缓冲区
+
             while not stop_event.is_set():
+                # 对于实时流：定期清空缓冲区，只处理最新帧
+                if not is_local_file:
+                    current_time = time.time()
+                    if current_time - last_buffer_clear_time >= buffer_clear_interval:
+                        # 快速抓取并丢弃缓冲区中的旧帧（不解码）
+                        # 注意：OpenCV的缓冲区大小通常是5-10帧
+                        buffer_size = int(cap.get(cv2.CAP_PROP_BUFFERSIZE)) if cap.get(cv2.CAP_PROP_BUFFERSIZE) > 0 else 5
+                        for _ in range(buffer_size - 1):
+                            cap.grab()  # 只抓取不解码，非常快
+                        last_buffer_clear_time = current_time
+
                 ret, frame = cap.read()
 
                 if not ret:
@@ -516,7 +532,8 @@ class VideoProcessor:
                     continue
 
                 self._analyze_frame(device_id, frame, frame_count)
-                time.sleep(0.1)
+                # 删除了 time.sleep(0.1)，让处理循环以最快速度运行
+                # AI处理本身已经有足够的耗时，不需要额外sleep
 
         except Exception as e:
             print(f"视频流处理异常 {device_id}: {str(e)}")
