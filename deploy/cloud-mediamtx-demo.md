@@ -54,12 +54,106 @@ HLS 兜底:  http://106.54.10.11:8888/live/mobile_001/index.m3u8
 RTSP 拉流: rtsp://106.54.10.11:8554/live/mobile_001
 ```
 
-## 2. 本地启动 frpc
+## 2.1 本地启动后端 AI 服务
+
+你的电脑仍然负责：
+
+- 后端 HTTP API / Socket.IO
+- AI 模型推理（车辆检测、违停、道路异常等）
+
+### WSL 启动方式
+
+```bash
+cd /root/S/Intelligent-Transportation-System
+python3 cloud/stream_receiver/main_server.py
+```
+
+### Windows 镜像启动方式
+
+```powershell
+cd E:\Intelligent-Transportation-System
+cloud\start-main-server.bat
+```
+
+启动后，本地服务监听：
+
+```text
+127.0.0.1:5000
+```
+
+frpc 会把它暴露到云端：
+
+```text
+http://106.54.10.11:15000
+```
+
+## 2.2 本地启动前端页面
+
+前端页面同样跑在你的电脑上，视频由腾讯云提供，事件结果由你本地后端经 frp 暴露后提供。
+
+### WSL 启动方式
+
+```bash
+cd /root/S/Intelligent-Transportation-System/ui
+cp .env.tencent-frp.example .env
+npm install
+npm run dev -- --host 0.0.0.0
+```
+
+然后浏览器打开：
+
+```text
+http://localhost:5173
+```
+
+### Windows 侧访问
+
+如果前端服务跑在 WSL，也可以直接在 Windows 浏览器打开：
+
+```text
+http://localhost:5173
+```
+
+frpc 会把前端暴露到云端：
+
+```text
+http://106.54.10.11:15173
+```
+
+## 2.3 本地启动 frpc
 
 本地 frp 现在只转发后端和前端，不再转发 RTMP/HLS/WebRTC：
 
+### Windows（推荐）
+
+仓库已为当前机器准备好下载目录，`frp` 已下载并建议解压到：
+
+```text
+E:\Intelligent-Transportation-System\tools\frp\frp_0.69.1_windows_amd64
+```
+
+直接双击运行：
+
+```text
+deploy\frp\start-frpc-local-ai.bat
+```
+
+等价命令为：
+
 ```powershell
-.\frpc.exe -c deploy\frp\frpc.local-ai.toml
+cd E:\Intelligent-Transportation-System\tools\frp\frp_0.69.1_windows_amd64
+.\frpc.exe -c E:\Intelligent-Transportation-System\deploy\frp\frpc.local-ai.toml
+```
+
+> 注意：PowerShell 下运行当前目录程序通常要写成 `./frpc.exe` 或 `.\frpc.exe`。
+
+### WSL / Linux（可选）
+
+如果你使用 Linux 版 `frpc`，在 WSL 项目根目录执行：
+
+```bash
+cd /root/S/Intelligent-Transportation-System
+./frpc -c deploy/frp/frpc.local-ai.toml
 ```
 
 公网仍可访问：
