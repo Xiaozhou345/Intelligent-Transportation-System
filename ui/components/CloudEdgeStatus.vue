@@ -40,7 +40,7 @@ const onlineDevices = computed(() => props.devices.filter(device => device.statu
 const edgeDevice = computed(() => props.devices.find(device => device.status === 'online') || props.devices[0] || null)
 
 const streamStatus = computed(() => {
-  if (props.systemData.stream_status === 'streaming') return '推流中'
+  if (props.systemData.stream_status === 'streaming') return '拉流中'
   if (props.systemData.stream_status === 'disconnected') return '已断开'
   return props.connectionStatus === '已连接' || props.connectionStatus === '演示模式' ? '待确认' : '未连接'
 })

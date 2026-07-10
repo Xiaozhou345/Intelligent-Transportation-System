@@ -35,6 +35,10 @@ class AnomalyDetector:
         outlier_min_area=250,
         outlier_color_distance=28,
         outlier_max_area=30000,
+        min_road_overlap=0.65,
+        filter_lane_markings=True,
+        use_default_road_scope=False,
+        max_background_vehicle_ratio=0.18,
         **_legacy_kwargs,
     ):
         """
@@ -62,6 +66,11 @@ class AnomalyDetector:
             outlier_min_area: Minimum compact candidate area for surface outliers.
             outlier_color_distance: LAB distance from estimated road surface.
             outlier_max_area: Maximum compact candidate area for surface outliers.
+            min_road_overlap: Minimum component-mask overlap with road scope.
+            filter_lane_markings: Remove bright lane-marking-like components.
+            use_default_road_scope: Use a sandbox fallback ROI when no mask/ROI is supplied.
+            max_background_vehicle_ratio: Skip background learning when vehicle masks
+                cover too much active road area.
         """
         self.history = history
         self.var_threshold = var_threshold
@@ -83,6 +92,10 @@ class AnomalyDetector:
         self.outlier_min_area = outlier_min_area
         self.outlier_color_distance = outlier_color_distance
         self.outlier_max_area = outlier_max_area
+        self.min_road_overlap = min_road_overlap
+        self.filter_lane_markings = filter_lane_markings
+        self.use_default_road_scope = use_default_road_scope
+        self.max_background_vehicle_ratio = max_background_vehicle_ratio
 
         self.bg_subtractor = self._create_subtractor()
         self.background_frames = 0
@@ -101,14 +114,19 @@ class AnomalyDetector:
     def update_background(self, frame=None, road_mask=None, vehicle_bboxes=None):
         """Feed a clean static-camera frame into the MOG2 background model."""
         if frame is None or frame.size == 0:
-            return
+            return False
+        scope = self._build_road_scope(frame.shape[:2], road_mask)
         frame = self._apply_road_mask_to_frame(frame, road_mask)
         if vehicle_bboxes:
             vehicle_mask = self._build_vehicle_mask(vehicle_bboxes, frame.shape)
+            if self._vehicle_mask_too_large(vehicle_mask, scope):
+                return False
             frame = frame.copy()
-            frame[vehicle_mask > 0] = 0
+            fill_color = self._estimate_road_fill_color(frame, scope, vehicle_mask)
+            frame[vehicle_mask > 0] = fill_color
         self.bg_subtractor.apply(frame, learningRate=1)
         self.background_frames += 1
+        return True
 
     def detect(self, frame, vehicle_bboxes=None, road_mask=None):
         """
@@ -125,7 +143,10 @@ class AnomalyDetector:
         if self.background_frames < self.warmup_frames:
             self.update_background(frame, road_mask=road_mask)
             startup_mask = self._detect_startup_static_mask(frame, vehicle_bboxes, road_mask)
-            return self._track_components(startup_mask)
+            road_scope = self._build_road_scope(frame.shape[:2], road_mask)
+            if startup_mask is not None:
+                startup_mask = self._remove_lane_markings(startup_mask, frame)
+            return self._track_components(startup_mask, frame=frame, road_scope=road_scope)
 
         if self.background_frames == 0 and self.warmup_frames <= 0:
             self.update_background(frame, road_mask=road_mask)
@@ -150,7 +171,11 @@ class AnomalyDetector:
         if outlier_mask is not None:
             fg_mask = cv2.bitwise_or(fg_mask, outlier_mask)
 
-        return self._track_components(fg_mask)
+        fg_mask = self._remove_lane_markings(fg_mask, frame)
+        if road_scope is not None:
+            fg_mask = cv2.bitwise_and(fg_mask, road_scope)
+
+        return self._track_components(fg_mask, frame=frame, road_scope=road_scope)
 
     def _detect_startup_static_mask(self, frame, vehicle_bboxes=None, road_mask=None):
         """Find likely objects that already existed before MOG2 background warmup.
@@ -273,6 +298,30 @@ class AnomalyDetector:
         cv2.fillPoly(scope, [polygon], 255)
         return scope
 
+    def _vehicle_mask_too_large(self, vehicle_mask, scope):
+        if self.max_background_vehicle_ratio <= 0:
+            return False
+
+        if scope is not None and cv2.countNonZero(scope) > 0:
+            active_pixels = cv2.countNonZero(scope)
+            masked_pixels = cv2.countNonZero(cv2.bitwise_and(vehicle_mask, scope))
+        else:
+            active_pixels = vehicle_mask.shape[0] * vehicle_mask.shape[1]
+            masked_pixels = cv2.countNonZero(vehicle_mask)
+
+        return active_pixels > 0 and (masked_pixels / float(active_pixels)) > self.max_background_vehicle_ratio
+
+    def _estimate_road_fill_color(self, frame, scope, vehicle_mask):
+        sample_mask = cv2.bitwise_not(vehicle_mask)
+        if scope is not None:
+            sample_mask = cv2.bitwise_and(sample_mask, scope)
+
+        if cv2.countNonZero(sample_mask) < 100:
+            return np.array([0, 0, 0], dtype=np.uint8)
+
+        pixels = frame[sample_mask > 0]
+        return np.median(pixels, axis=0).astype(np.uint8)
+
     def _find_enclosed_holes(self, mask):
         flood = mask.copy()
         height, width = mask.shape[:2]
@@ -306,9 +355,12 @@ class AnomalyDetector:
             cv2.fillPoly(roi_mask, [np.array(self.road_roi, dtype=np.int32)], 255)
             scope = roi_mask if scope is None else cv2.bitwise_and(scope, roi_mask)
 
+        if scope is None and self.use_default_road_scope:
+            scope = self._build_default_sandbox_road_scope(shape)
+
         return scope
 
-    def _track_components(self, mask):
+    def _track_components(self, mask, frame=None, road_scope=None):
         if mask is None:
             return self._age_unmatched_tracks(set())
 
@@ -324,6 +376,11 @@ class AnomalyDetector:
                 continue
 
             x, y, w, h = cv2.boundingRect(contour)
+            if self._is_low_road_overlap(contour, mask.shape, road_scope):
+                continue
+            if frame is not None and self._is_lane_marking_like(frame, contour, (x, y, w, h)):
+                continue
+
             bbox = [x, y, x + w, y + h]
             center = [x + w // 2, y + h // 2]
             current_anomalies.append(
@@ -334,6 +391,62 @@ class AnomalyDetector:
         self._age_unmatched_tracks(current_ids)
 
         return current_anomalies
+
+    def _remove_lane_markings(self, mask, frame):
+        if not self.filter_lane_markings or mask is None:
+            return mask
+
+        lane_mask = self._build_lane_marking_mask(frame)
+        if cv2.countNonZero(lane_mask) == 0:
+            return mask
+
+        lane_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+        lane_mask = cv2.dilate(lane_mask, lane_kernel, iterations=1)
+        return cv2.bitwise_and(mask, cv2.bitwise_not(lane_mask))
+
+    def _build_lane_marking_mask(self, frame):
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        h, s, v = cv2.split(hsv)
+        white_markings = (v > 150) & (s < 95)
+        yellow_markings = (h >= 12) & (h <= 42) & (s > 70) & (v > 115)
+        return (white_markings | yellow_markings).astype(np.uint8) * 255
+
+    def _is_low_road_overlap(self, contour, shape, road_scope):
+        if road_scope is None or self.min_road_overlap <= 0:
+            return False
+
+        component_mask = np.zeros(shape, dtype=np.uint8)
+        cv2.drawContours(component_mask, [contour], -1, 255, -1)
+        component_area = cv2.countNonZero(component_mask)
+        if component_area == 0:
+            return True
+
+        road_hits = cv2.countNonZero(cv2.bitwise_and(component_mask, road_scope))
+        return (road_hits / float(component_area)) < self.min_road_overlap
+
+    def _is_lane_marking_like(self, frame, contour, rect):
+        if not self.filter_lane_markings:
+            return False
+
+        x, y, w, h = rect
+        if w <= 0 or h <= 0:
+            return True
+
+        aspect_ratio = max(w / h, h / w)
+        area = cv2.contourArea(contour)
+        extent = area / max(1, w * h)
+        if aspect_ratio < 2.6 or extent < 0.08:
+            return False
+
+        component_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+        cv2.drawContours(component_mask, [contour], -1, 255, -1)
+        lane_mask = self._build_lane_marking_mask(frame)
+        component_area = cv2.countNonZero(component_mask)
+        if component_area == 0:
+            return True
+
+        lane_hits = cv2.countNonZero(cv2.bitwise_and(component_mask, lane_mask))
+        return (lane_hits / float(component_area)) >= 0.45
 
     def _age_unmatched_tracks(self, current_ids):
         for anomaly_id in list(self.tracked_anomalies.keys()):

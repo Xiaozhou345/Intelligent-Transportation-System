@@ -77,7 +77,9 @@ class VideoProcessor:
             "parking_min_history": 3,
             "density_emit_every_processed_frames": 3,
             "active_scene": "vehicle_detection",
-            "anomaly_mode": "detecting",
+            "anomaly_mode": "background_learning",
+            "anomaly_road_roi": [],
+            "anomaly_min_background_frames": 8,
         }
         if not config_path.exists():
             print("⚠️  未找到 illegal_parking_config.json，将使用内置默认配置")
@@ -116,6 +118,7 @@ class VideoProcessor:
                 max_area_ratio=float(os.getenv("ITS_ANOMALY_MAX_AREA_RATIO", "0.08")),
                 static_frames_threshold=int(os.getenv("ITS_ANOMALY_STATIC_FRAMES", "3")),
                 max_missed_frames=int(os.getenv("ITS_ANOMALY_MAX_MISSED", "4")),
+                road_roi=self._scale_polygon_for_base_size(self.runtime_defaults.get("anomaly_road_roi", [])),
                 warmup_frames=int(os.getenv("ITS_ANOMALY_WARMUP_FRAMES", "0")),
                 learning_rate=float(os.getenv("ITS_ANOMALY_LEARNING_RATE", "0")),
                 startup_static_kernel=int(os.getenv("ITS_STARTUP_STATIC_KERNEL", "55")),
@@ -124,6 +127,10 @@ class VideoProcessor:
                 outlier_min_area=int(os.getenv("ITS_OUTLIER_MIN_AREA", "250")),
                 outlier_color_distance=float(os.getenv("ITS_OUTLIER_COLOR_DISTANCE", "24")),
                 outlier_max_area=int(os.getenv("ITS_OUTLIER_MAX_AREA", "30000")),
+                min_road_overlap=float(os.getenv("ITS_ANOMALY_MIN_ROAD_OVERLAP", "0.65")),
+                filter_lane_markings=os.getenv("ITS_FILTER_LANE_MARKINGS", "true").lower() == "true",
+                use_default_road_scope=os.getenv("ITS_USE_DEFAULT_ROAD_SCOPE", "true").lower() == "true",
+                max_background_vehicle_ratio=float(os.getenv("ITS_BG_MAX_VEHICLE_RATIO", "0.18")),
             )
             self.anomaly_processor = RoadAnomalyProcessor(
                 detector=detector,
@@ -173,12 +180,14 @@ class VideoProcessor:
                 "frame_shape": None,
                 "traffic_regions": [],
                 "no_parking_zones": [],
+                "anomaly_road_roi": [],
                 "traffic_thresholds": dict(self.runtime_defaults.get("traffic_thresholds", {"smooth_max": 2, "slow_max": 5})),
                 "density_emit_every_processed_frames": int(self.runtime_defaults.get("density_emit_every_processed_frames", 3)),
                 "processed_frames": 0,
                 "active_scene": self._resolve_scene_for_device(device_id),
                 "anomaly_mode": self.runtime_defaults.get("anomaly_mode", "detecting"),
                 "anomaly_background_frames": 0,
+                "anomaly_background_skipped_frames": 0,
             }
             self.runtime_state[device_id] = state
 
@@ -186,7 +195,10 @@ class VideoProcessor:
             state["frame_shape"] = frame_shape
             state["traffic_regions"] = self._scale_regions(self.runtime_defaults.get("traffic_regions", []), frame_shape)
             state["no_parking_zones"] = self._scale_regions(self.runtime_defaults.get("no_parking_zones", []), frame_shape)
+            state["anomaly_road_roi"] = self._scale_polygon(self.runtime_defaults.get("anomaly_road_roi", []), frame_shape)
             state["parking_monitor"].zones = state["no_parking_zones"]
+            if self.anomaly_processor:
+                self.anomaly_processor.detector.road_roi = state["anomaly_road_roi"] or None
         return state
 
     @staticmethod
@@ -224,6 +236,29 @@ class VideoProcessor:
             item["polygon"] = polygon
             scaled.append(item)
         return scaled
+
+    @staticmethod
+    def _scale_polygon(polygon, frame_shape):
+        height, width = frame_shape[:2]
+        scaled = []
+        for x, y in polygon or []:
+            if 0 <= x <= 1 and 0 <= y <= 1:
+                scaled.append([int(round(x * width)), int(round(y * height))])
+            else:
+                scaled.append([int(round(x)), int(round(y))])
+        return scaled
+
+    def _scale_polygon_for_base_size(self, polygon):
+        """Scale normalized ROI for detector construction before first frame.
+
+        The detector ROI is updated with exact frame dimensions once the first
+        frame arrives, so normalized coordinates can be passed through here.
+        """
+        if not polygon:
+            return None
+        if all(0 <= x <= 1 and 0 <= y <= 1 for x, y in polygon):
+            return polygon
+        return polygon
 
     def start_processing(self, device_id, stream_url):
         if device_id in self.active_streams:
@@ -395,27 +430,40 @@ class VideoProcessor:
             anomaly_mode = state.get("anomaly_mode", "detecting")
             if anomaly_mode == "background_learning":
                 road_mask = self.anomaly_processor.predict_road_mask(frame)
-                self.anomaly_processor.update_background(
+                learned = self.anomaly_processor.update_background(
                     frame,
                     road_mask=road_mask,
                     vehicle_bboxes=vehicle_bboxes,
                 )
-                state["anomaly_background_frames"] = state.get("anomaly_background_frames", 0) + 1
-                if state["anomaly_background_frames"] == 1 or state["anomaly_background_frames"] % 10 == 0:
+                if learned:
+                    state["anomaly_background_frames"] = state.get("anomaly_background_frames", 0) + 1
+                else:
+                    state["anomaly_background_skipped_frames"] = state.get("anomaly_background_skipped_frames", 0) + 1
+
+                background_frames = state.get("anomaly_background_frames", 0)
+                skipped_frames = state.get("anomaly_background_skipped_frames", 0)
+                should_report = (
+                    background_frames == 1
+                    or (learned and background_frames % 10 == 0)
+                    or (not learned and skipped_frames % 5 == 0)
+                )
+                if should_report:
                     self._send_result({
                         "event_type": "anomaly_calibration",
                         "timestamp": timestamp,
                         "device_id": device_id,
-                        "status": "learning",
+                        "status": "learning" if learned else "skipped",
                         "data": {
                             "mode": "background_learning",
-                            "background_frames": state["anomaly_background_frames"],
+                            "background_frames": background_frames,
+                            "skipped_frames": skipped_frames,
                             "vehicle_masks": len(vehicle_bboxes),
+                            "reason": None if learned else "vehicle_mask_too_large_or_invalid_frame",
                         },
                     })
                     print(
                         f"道路异常背景学习中: device={device_id} "
-                        f"frames={state['anomaly_background_frames']} "
+                        f"frames={background_frames} skipped={skipped_frames} "
                         f"vehicle_masks={len(vehicle_bboxes)}"
                     )
             else:
@@ -445,6 +493,8 @@ class VideoProcessor:
             device_id=device_id,
             timestamp=timestamp,
             frame=frame,
+            state=state,
+            active_scene=active_scene,
             tracked_vehicles=tracked_vehicles,
             parking_events=parking_events,
             anomaly_events=anomaly_events,
@@ -528,11 +578,12 @@ class VideoProcessor:
             state["active_scene"] = "road_anomaly"
             state["anomaly_mode"] = "background_learning"
             state["anomaly_background_frames"] = 0
+            state["anomaly_background_skipped_frames"] = 0
 
         self.runtime_defaults["active_scene"] = "road_anomaly"
         self.runtime_defaults["anomaly_mode"] = "background_learning"
         print("道路异常背景学习已开始")
-        return {"status": "success", "mode": "background_learning", "reset": reset}
+        return {"status": "success", "mode": "background_learning", "reset": reset, "background_frames": 0, "skipped_frames": 0}
 
     def start_anomaly_detection(self, device_id=None):
         if not self.anomaly_processor:
@@ -540,15 +591,28 @@ class VideoProcessor:
 
         targets = self._target_states(device_id)
         background_frames = 0
+        min_background_frames = int(self.runtime_defaults.get("anomaly_min_background_frames", 8))
+        for state in targets:
+            background_frames = max(background_frames, state.get("anomaly_background_frames", 0))
+
+        if targets and background_frames < min_background_frames:
+            print(f"道路异常检测未启动，背景帧不足: {background_frames}/{min_background_frames}")
+            return {
+                "status": "error",
+                "mode": "background_learning",
+                "message": f"背景学习帧数不足，请至少学习 {min_background_frames} 帧",
+                "background_frames": background_frames,
+                "min_background_frames": min_background_frames,
+            }
+
         for state in targets:
             state["active_scene"] = "road_anomaly"
             state["anomaly_mode"] = "detecting"
-            background_frames = max(background_frames, state.get("anomaly_background_frames", 0))
 
         self.runtime_defaults["active_scene"] = "road_anomaly"
         self.runtime_defaults["anomaly_mode"] = "detecting"
         print(f"道路异常检测已开始，背景帧数: {background_frames}")
-        return {"status": "success", "mode": "detecting", "background_frames": background_frames}
+        return {"status": "success", "mode": "detecting", "background_frames": background_frames, "min_background_frames": min_background_frames}
 
     def reset_anomaly_background(self, device_id=None):
         if not self.anomaly_processor:
@@ -556,11 +620,14 @@ class VideoProcessor:
 
         self.anomaly_processor.reset()
         for state in self._target_states(device_id):
-            state["anomaly_mode"] = "detecting"
+            state["active_scene"] = "road_anomaly"
+            state["anomaly_mode"] = "background_learning"
             state["anomaly_background_frames"] = 0
-        self.runtime_defaults["anomaly_mode"] = "detecting"
-        print("道路异常背景已重置")
-        return {"status": "success", "mode": "detecting", "background_frames": 0}
+            state["anomaly_background_skipped_frames"] = 0
+        self.runtime_defaults["active_scene"] = "road_anomaly"
+        self.runtime_defaults["anomaly_mode"] = "background_learning"
+        print("道路异常背景已重置，已进入背景学习模式")
+        return {"status": "success", "mode": "background_learning", "background_frames": 0, "skipped_frames": 0}
 
     def get_anomaly_status(self, device_id=None):
         if device_id and device_id in self.runtime_state:
@@ -570,6 +637,8 @@ class VideoProcessor:
                 "device_id": device_id,
                 "mode": state.get("anomaly_mode", "detecting"),
                 "background_frames": state.get("anomaly_background_frames", 0),
+                "skipped_frames": state.get("anomaly_background_skipped_frames", 0),
+                "min_background_frames": int(self.runtime_defaults.get("anomaly_min_background_frames", 8)),
                 "active_scene": state.get("active_scene"),
                 "enabled": self.anomaly_processor is not None,
             }
@@ -581,6 +650,10 @@ class VideoProcessor:
             "background_frames": max(
                 [state.get("anomaly_background_frames", 0) for state in self.runtime_state.values()] or [0]
             ),
+            "skipped_frames": sum(
+                state.get("anomaly_background_skipped_frames", 0) for state in self.runtime_state.values()
+            ),
+            "min_background_frames": int(self.runtime_defaults.get("anomaly_min_background_frames", 8)),
             "active_scene": self.runtime_defaults.get("active_scene"),
             "enabled": self.anomaly_processor is not None,
         }
@@ -632,12 +705,13 @@ class VideoProcessor:
             j = i
         return inside
 
-    def _build_video_overlay(self, device_id, timestamp, frame, tracked_vehicles, parking_events, anomaly_events, plate_events):
+    def _build_video_overlay(self, device_id, timestamp, frame, state, active_scene, tracked_vehicles, parking_events, anomaly_events, plate_events):
         overlay = {
             'event_type': 'video_overlay',
             'timestamp': timestamp,
             'device_id': device_id,
             'status': 'normal',
+            'active_scene': active_scene,
             'stream_size': {
                 'width': int(frame.shape[1]),
                 'height': int(frame.shape[0]),
@@ -645,6 +719,7 @@ class VideoProcessor:
             'data': {
                 'vehicles': [],
                 'plates': [],
+                'traffic_regions': [],
                 'no_parking_zones': [],
                 'illegal_parking': [],
                 'road_anomalies': [],
@@ -666,6 +741,17 @@ class VideoProcessor:
                 'label': event.get('data', {}).get('plate_number', 'plate'),
                 'confidence': event.get('data', {}).get('confidence', 0),
                 'track_id': event.get('data', {}).get('track_id'),
+            })
+
+        for region in state.get('traffic_regions', []):
+            polygon = region.get('polygon', [])
+            if len(polygon) < 3:
+                continue
+            overlay['data']['traffic_regions'].append({
+                'region_id': region.get('region_id', 'road'),
+                'name': region.get('name', region.get('region_id', 'road')),
+                'polygon': [[int(x), int(y)] for x, y in polygon],
+                'label': region.get('name', region.get('region_id', 'road')),
             })
 
         for event in parking_events:

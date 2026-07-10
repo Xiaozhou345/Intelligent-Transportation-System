@@ -63,7 +63,7 @@ const handleAddDevice = () => {
   form.scene_id = ''
   showAddDialog.value = false
   
-  ElMessage.success('设备添加成功')
+  ElMessage.success('已添加本地演示设备')
 }
 
 const handleViewDetail = (device) => {
@@ -81,7 +81,7 @@ watch(() => props.devices, (newDevices) => {
     <div class="header">
       <h3>设备管理</h3>
       <ElButton type="primary" size="small" @click="showAddDialog = true">
-        添加设备
+        本地演示添加
       </ElButton>
     </div>
     
@@ -120,7 +120,7 @@ watch(() => props.devices, (newDevices) => {
       暂无设备记录
     </div>
     
-    <ElDialog title="添加设备" v-model="showAddDialog" width="400px">
+    <ElDialog title="本地演示添加设备" v-model="showAddDialog" width="400px">
       <ElForm :model="form" label-width="80px">
         <ElFormItem label="设备编号">
           <ElInput v-model="form.device_id" placeholder="请输入设备编号" />

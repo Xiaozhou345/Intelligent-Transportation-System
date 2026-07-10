@@ -51,7 +51,13 @@ const closeDialog = () => {
           <ElInput v-model="form.username" maxlength="24" />
         </ElFormItem>
         <ElFormItem label="角色">
-          <ElSelect v-model="form.role" class="role-select">
+          <ElSelect
+            v-model="form.role"
+            class="role-select"
+            popper-class="login-role-popper"
+            :teleported="true"
+            fit-input-width
+          >
             <ElOption label="管理员" value="admin" />
             <ElOption label="值班员" value="operator" />
             <ElOption label="访客" value="viewer" />
@@ -89,7 +95,13 @@ const closeDialog = () => {
           <ElInput v-model="form.username" maxlength="24" />
         </ElFormItem>
         <ElFormItem label="角色">
-          <ElSelect v-model="form.role" class="role-select">
+          <ElSelect
+            v-model="form.role"
+            class="role-select"
+            popper-class="login-role-popper"
+            :teleported="true"
+            fit-input-width
+          >
             <ElOption label="管理员" value="admin" />
             <ElOption label="值班员" value="operator" />
             <ElOption label="访客" value="viewer" />
@@ -127,6 +139,35 @@ const closeDialog = () => {
 
 .role-select {
   width: 100%;
+}
+
+:global(.login-role-popper) {
+  z-index: 5000 !important;
+}
+
+:global(.login-role-popper.el-popper) {
+  background: #0f172a;
+  border: 1px solid rgba(56, 189, 248, 0.34);
+  box-shadow: 0 18px 44px rgba(2, 8, 23, 0.62);
+}
+
+:global(.login-role-popper .el-select-dropdown__item) {
+  color: #dbeafe;
+}
+
+:global(.login-role-popper .el-select-dropdown__item.is-hovering),
+:global(.login-role-popper .el-select-dropdown__item:hover) {
+  background: rgba(14, 165, 233, 0.18);
+}
+
+:global(.login-role-popper .el-select-dropdown__item.is-selected) {
+  background: rgba(34, 211, 238, 0.18);
+  color: #67e8f9;
+}
+
+:global(.login-role-popper .el-popper__arrow::before) {
+  background: #0f172a;
+  border-color: rgba(56, 189, 248, 0.34);
 }
 
 .user-session-embedded {

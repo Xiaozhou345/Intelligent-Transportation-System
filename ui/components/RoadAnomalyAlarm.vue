@@ -10,10 +10,18 @@ const props = defineProps({
   canDispose: {
     type: Boolean,
     default: true
+  },
+  canOperate: {
+    type: Boolean,
+    default: true
+  },
+  modeStatus: {
+    type: Object,
+    default: () => ({})
   }
 })
 
-const emit = defineEmits(['dispose-alarm'])
+const emit = defineEmits(['dispose-alarm', 'send-command'])
 
 const displayRecords = ref([])
 const resolvedKeys = ref(new Set())
@@ -64,6 +72,42 @@ const getStatusText = (status) => {
 
 const getStatusType = (status) => {
   return status === 'warning' ? 'danger' : 'success'
+}
+
+const getModeText = (mode) => {
+  if (mode === 'background_learning') return '背景学习中'
+  if (mode === 'detecting') return '检测中'
+  return '未标定'
+}
+
+const getModeType = (mode) => {
+  if (mode === 'background_learning') return 'warning'
+  if (mode === 'detecting') return 'success'
+  return 'info'
+}
+
+const sendAnomalyCommand = (command, message) => {
+  emit('send-command', { command })
+  if (message) {
+    ElNotification({
+      title: '异常检测模式',
+      message,
+      type: 'info',
+      duration: 3000
+    })
+  }
+}
+
+const startBackgroundLearning = () => {
+  sendAnomalyCommand('anomaly_background_start', '请保持道路画面干净，系统正在学习正常背景')
+}
+
+const startDetection = () => {
+  sendAnomalyCommand('anomaly_detection_start', '已进入检测模式，现在可以放置异物')
+}
+
+const resetCalibration = () => {
+  sendAnomalyCommand('anomaly_reset', '已重置背景模型，请重新初始化背景')
 }
 
 const handleRowClass = ({ row }) => {
@@ -120,7 +164,35 @@ watch(() => props.records.length, (newLen, oldLen) => {
 
 <template>
   <div class="road-anomaly-alarm">
-    <h3>道路异常告警</h3>
+    <div class="alarm-header">
+      <div>
+        <h3>道路异常告警</h3>
+        <p>先初始化干净道路背景，再放置异物并开始检测</p>
+      </div>
+      <ElTag :type="getModeType(modeStatus.mode)" size="small">
+        {{ getModeText(modeStatus.mode) }}
+      </ElTag>
+    </div>
+
+    <div class="calibration-actions">
+      <ElButton type="warning" size="small" :disabled="!canOperate" @click="startBackgroundLearning">
+        初始化背景
+      </ElButton>
+      <ElButton type="danger" size="small" :disabled="!canOperate" @click="startDetection">
+        开始检测
+      </ElButton>
+      <ElButton size="small" :disabled="!canOperate" @click="resetCalibration">
+        重新标定
+      </ElButton>
+      <span v-if="modeStatus.background_frames !== undefined">
+        背景帧 {{ modeStatus.background_frames }}/{{ modeStatus.min_background_frames || 8 }}
+      </span>
+      <span v-if="modeStatus.skipped_frames">
+        跳过 {{ modeStatus.skipped_frames }}
+      </span>
+      <span v-if="modeStatus.status === 'error'" class="calibration-error">{{ modeStatus.message }}</span>
+    </div>
+
     <ElTable 
       :data="displayRecords" 
       stripe 
@@ -237,7 +309,43 @@ watch(() => props.records.length, (newLen, oldLen) => {
 .road-anomaly-alarm h3 {
   font-size: 16px;
   color: #e0f2fe;
+  margin: 0;
+}
+
+.alarm-header {
+  align-items: flex-start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
   margin-bottom: 12px;
+}
+
+.alarm-header p {
+  color: #93c5fd;
+  font-size: 12px;
+  margin: 4px 0 0;
+}
+
+.calibration-actions {
+  align-items: center;
+  background: rgba(14, 165, 233, 0.1);
+  border: 1px solid rgba(56, 189, 248, 0.14);
+  border-radius: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 10px;
+}
+
+.calibration-actions span {
+  color: #93c5fd;
+  font-size: 12px;
+}
+
+.calibration-actions .calibration-error {
+  color: #fecaca;
+  flex-basis: 100%;
 }
 
 .anomaly-row-highlight {

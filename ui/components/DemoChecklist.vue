@@ -46,7 +46,7 @@ const checks = computed(() => [
     detail: props.connectionStatus
   },
   {
-    label: '云端 MediaMTX 视频流',
+    label: 'AI 分析拉流',
     ok: props.streamStatus === '拉流中' || props.streamStatus === '演示流',
     detail: props.streamStatus
   },

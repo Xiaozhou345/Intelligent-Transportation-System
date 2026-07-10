@@ -9,7 +9,16 @@ from device_manager import DeviceManager
 from video_processor import VideoProcessor
 from datetime import datetime
 import os
+import platform
 from pathlib import Path
+import shutil
+import subprocess
+import time
+
+try:
+    import psutil
+except ImportError:
+    psutil = None
 
 
 # 创建Flask应用
@@ -24,6 +33,71 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 device_manager = DeviceManager()
 video_processor = VideoProcessor(device_manager, socketio)
 UPLOAD_DIR = Path(__file__).resolve().parents[2] / "data" / "uploads" / "video_segments"
+PROCESS_STARTED_AT = time.time()
+
+
+def _safe_percent(value):
+    try:
+        return round(max(0, min(100, float(value))), 1)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _read_gpu_usage():
+    """Return GPU utilization percent when NVIDIA tooling is available."""
+    nvidia_smi = shutil.which("nvidia-smi")
+    if not nvidia_smi:
+        return 0
+
+    try:
+        result = subprocess.run(
+            [
+                nvidia_smi,
+                "--query-gpu=utilization.gpu",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=True,
+        )
+        values = [
+            float(line.strip())
+            for line in result.stdout.splitlines()
+            if line.strip()
+        ]
+        return _safe_percent(sum(values) / len(values)) if values else 0
+    except Exception:
+        return 0
+
+
+def collect_system_status():
+    active_streams = video_processor.get_active_streams()
+    devices = device_manager.get_all_devices()
+
+    if psutil:
+        cpu_usage = psutil.cpu_percent(interval=0.05)
+        memory_usage = psutil.virtual_memory().percent
+        process = psutil.Process(os.getpid())
+        process_memory_mb = round(process.memory_info().rss / 1024 / 1024, 1)
+    else:
+        cpu_usage = 0
+        memory_usage = 0
+        process_memory_mb = 0
+
+    return {
+        "cpu_usage": _safe_percent(cpu_usage),
+        "gpu_usage": _read_gpu_usage(),
+        "memory_usage": _safe_percent(memory_usage),
+        "stream_status": "streaming" if active_streams else "disconnected",
+        "active_streams": len(active_streams),
+        "active_devices": len(devices),
+        "bitrate": None,
+        "process_memory_mb": process_memory_mb,
+        "uptime_seconds": int(time.time() - PROCESS_STARTED_AT),
+        "platform": platform.platform(),
+        "timestamp": datetime.now().isoformat(),
+    }
 
 
 # ==================== HTTP API 接口 ====================
@@ -222,6 +296,15 @@ def health_check():
     }), 200
 
 
+@app.route('/api/system/status', methods=['GET'])
+def get_system_status():
+    """获取后端主机和视频处理运行状态。"""
+    return jsonify({
+        "status": "success",
+        "data": collect_system_status(),
+    }), 200
+
+
 @app.route('/api/video/upload', methods=['POST'])
 def upload_video_segment():
     """备用视频段上传接口。
@@ -334,6 +417,13 @@ def handle_connect():
     """前端连接事件"""
     print(f"前端客户端已连接")
     emit('connection_status', {'status': 'connected', 'message': '已连接到云端服务器'})
+    emit('analysis_result', {
+        "event_type": "system_status",
+        "timestamp": datetime.now().isoformat(),
+        "device_id": "cloud_server",
+        "status": "normal",
+        "data": collect_system_status(),
+    })
 
 
 @socketio.on('disconnect')
@@ -347,6 +437,9 @@ def handle_request_devices():
     """前端请求设备列表"""
     devices = device_manager.get_all_devices()
     device_list = [device.to_dict() for device in devices.values()]
+    active_streams = video_processor.get_active_streams()
+    for device in device_list:
+        device['stream_processing'] = device['device_id'] in active_streams
     emit('devices_list', {'devices': device_list})
 
 

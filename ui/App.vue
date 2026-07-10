@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, reactive, onMounted, onUnmounted } from 'vue'
+import { computed, ref, reactive, onMounted, onUnmounted, nextTick } from 'vue'
 import { ElAlert, ElTabPane, ElTabs, ElTag } from 'element-plus'
 import websocketManager from './utils/websocketManager'
 import VideoPlayer from './components/VideoPlayer.vue'
@@ -30,8 +30,10 @@ const eventRecords = ref([])
 const latestLatency = ref(0)
 const currentTime = ref(new Date())
 let clockTimer = null
+let systemStatusTimer = null
 
 const videoPlayerRef = ref(null)
+const latestVideoOverlay = ref(null)
 
 const CLOUD_SERVER_URL = import.meta.env.VITE_CLOUD_SERVER_URL || 'http://106.54.10.11:15000'
 const liveVideoSrc = import.meta.env.VITE_LIVE_VIDEO_URL || 'http://106.54.10.11:8888/live/mobile_001/index.m3u8'
@@ -49,6 +51,7 @@ const trafficDensityData = ref([])
 const illegalParkingRecords = ref([])
 const roadAnomalyRecords = ref([])
 const systemStatus = ref({})
+const anomalyModeStatus = ref({ mode: 'detecting', background_frames: 0, enabled: false })
 const currentUser = ref(null)
 const showLoginDialog = ref(false)
 const alarmDispositionRecords = ref([])
@@ -264,6 +267,9 @@ const updateLatency = (timestamp) => {
 
 const handleSceneChange = (scene) => {
   activeScene.value = scene
+  nextTick(() => {
+    redrawCurrentOverlay()
+  })
   handleSendCommand({
     command: 'switch_scene',
     scene_id: scene
@@ -320,21 +326,48 @@ const buildOverlayBoxes = (overlay) => {
       }))
   }
 
-  return [
-    ...normalizePolygons(data.no_parking_zones, '#f97316', 'rgba(249, 115, 22, 0.16)', 'no parking'),
-    ...normalize(data.vehicles, '#38bdf8', 'vehicle'),
-    ...normalize(data.plates, '#22c55e', 'plate'),
-    ...normalize(data.illegal_parking, '#ef4444', 'illegal'),
-    ...normalize(data.road_anomalies, '#a855f7', 'anomaly')
-  ]
+  if (activeScene.value === 'vehicle_detection') {
+    return normalize(data.vehicles, '#38bdf8', 'vehicle')
+  }
+
+  if (activeScene.value === 'plate_recognition') {
+    return normalize(data.plates, '#22c55e', 'plate')
+  }
+
+  if (activeScene.value === 'traffic_density') {
+    return normalizePolygons(data.traffic_regions, '#eab308', 'rgba(234, 179, 8, 0.16)', 'density region')
+  }
+
+  if (activeScene.value === 'illegal_parking') {
+    return [
+      ...normalizePolygons(data.no_parking_zones, '#f97316', 'rgba(249, 115, 22, 0.16)', 'no parking'),
+      ...normalize(data.illegal_parking, '#ef4444', 'illegal')
+    ]
+  }
+
+  if (activeScene.value === 'road_anomaly') {
+    return normalize(data.road_anomalies, '#a855f7', 'anomaly')
+  }
+
+  return []
 }
 
 const handleVideoOverlay = (data) => {
+  latestVideoOverlay.value = data
   if (!videoPlayerRef.value) return
   const sourceSize = data.stream_size?.width && data.stream_size?.height
     ? { width: data.stream_size.width, height: data.stream_size.height }
     : null
   videoPlayerRef.value.drawBoxes(buildOverlayBoxes(data), sourceSize)
+}
+
+const redrawCurrentOverlay = () => {
+  if (!videoPlayerRef.value || !latestVideoOverlay.value) return
+  const overlay = latestVideoOverlay.value
+  const sourceSize = overlay.stream_size?.width && overlay.stream_size?.height
+    ? { width: overlay.stream_size.width, height: overlay.stream_size.height }
+    : null
+  videoPlayerRef.value.drawBoxes(buildOverlayBoxes(overlay), sourceSize)
 }
 
 const handleVehicleDetection = (data) => {
@@ -374,6 +407,83 @@ const handleRoadAnomaly = (data) => {
 const handleSystemStatus = (data) => {
   if (data.data) {
     systemStatus.value = data.data
+  }
+}
+
+const normalizeDevice = (device) => {
+  const streamProcessing = Boolean(device.stream_processing)
+  const rawStatus = device.status || 'offline'
+  return {
+    ...device,
+    status: rawStatus === 'online' || streamProcessing ? 'online' : 'offline',
+    stream_processing: streamProcessing,
+    last_heartbeat: device.last_heartbeat || device.register_time || '',
+    device_type: device.device_type || 'unknown',
+    scene_id: device.scene_id || '-'
+  }
+}
+
+const updateDeviceList = (devices = []) => {
+  deviceList.value = (Array.isArray(devices) ? devices : []).map(normalizeDevice)
+}
+
+const handleAnomalyModeUpdated = (data) => {
+  const payload = data.data || data
+  anomalyModeStatus.value = {
+    ...anomalyModeStatus.value,
+    ...payload
+  }
+}
+
+const handleAnomalyCalibration = (data) => {
+  const payload = data.data || {}
+  anomalyModeStatus.value = {
+    ...anomalyModeStatus.value,
+    status: data.status === 'skipped' ? 'warning' : 'success',
+    message: '',
+    mode: payload.mode || 'background_learning',
+    background_frames: payload.background_frames ?? anomalyModeStatus.value.background_frames,
+    skipped_frames: payload.skipped_frames ?? anomalyModeStatus.value.skipped_frames,
+    last_calibration_status: data.status,
+    last_calibration_reason: payload.reason
+  }
+}
+
+const fetchSystemStatus = async () => {
+  if (websocketManager.isSimulating()) return
+  try {
+    const response = await fetch(`${CLOUD_SERVER_URL}/api/system/status`, { cache: 'no-store' })
+    if (!response.ok) return
+    const payload = await response.json()
+    if (payload?.data) {
+      handleSystemStatus({ data: payload.data })
+    }
+  } catch (error) {
+    console.warn('系统状态拉取失败:', error)
+  }
+}
+
+const fetchAnomalyStatus = async () => {
+  if (websocketManager.isSimulating()) return
+  try {
+    const response = await fetch(`${CLOUD_SERVER_URL}/api/anomaly/status`, { cache: 'no-store' })
+    if (!response.ok) return
+    const payload = await response.json()
+    handleAnomalyModeUpdated({ data: payload })
+  } catch (error) {
+    console.warn('异常检测状态拉取失败:', error)
+  }
+}
+
+const fetchDevices = async () => {
+  if (websocketManager.isSimulating()) return
+  try {
+    const response = await fetch(`${CLOUD_SERVER_URL}/api/devices`, { cache: 'no-store' })
+    if (!response.ok) return
+    const payload = await response.json()
+    updateDeviceList(payload.devices)
+  } catch (error) {
+    console.warn('设备列表拉取失败:', error)
   }
 }
 
@@ -420,6 +530,12 @@ const routeEvent = (data) => {
     handleRoadAnomaly(data)
   } else if (data.event_type === 'system_status') {
     handleSystemStatus(data)
+  } else if (data.event_type === 'anomaly_mode_updated') {
+    handleAnomalyModeUpdated(data)
+  } else if (data.event_type === 'anomaly_calibration') {
+    handleAnomalyCalibration(data)
+  } else if (data.event_type === 'devices_list') {
+    updateDeviceList(data.data?.devices)
   }
 }
 
@@ -430,6 +546,15 @@ onMounted(() => {
   clockTimer = setInterval(() => {
     currentTime.value = new Date()
   }, 1000)
+
+  fetchSystemStatus()
+  fetchAnomalyStatus()
+  fetchDevices()
+  systemStatusTimer = setInterval(() => {
+    fetchSystemStatus()
+    fetchAnomalyStatus()
+    fetchDevices()
+  }, 3000)
 
   websocketManager.onMessage((data) => {
     console.log('WebSocket 消息:', data)
@@ -445,6 +570,10 @@ onMounted(() => {
       errorMessage.value = 'WebSocket 连接失败，已达到最大重试次数'
     } else if (status === 'connected' || status === 'simulating') {
       showError.value = false
+      if (status === 'connected') {
+        websocketManager.sendEvent('request_devices')
+        fetchDevices()
+      }
     }
   })
 
@@ -454,6 +583,9 @@ onMounted(() => {
 onUnmounted(() => {
   if (clockTimer) {
     clearInterval(clockTimer)
+  }
+  if (systemStatusTimer) {
+    clearInterval(systemStatusTimer)
   }
   if (!isPublisherMode) {
     websocketManager.disconnect()
@@ -651,7 +783,10 @@ onUnmounted(() => {
             v-else-if="activeScene === 'road_anomaly'"
             :records="roadAnomalyRecords"
             :can-dispose="canOperate"
+            :can-operate="canOperate"
+            :mode-status="anomalyModeStatus"
             @dispose-alarm="applyAlarmStatus"
+            @send-command="handleSendCommand"
           />
         </section>
 
@@ -666,7 +801,10 @@ onUnmounted(() => {
           <RoadAnomalyAlarm
             :records="roadAnomalyRecords"
             :can-dispose="canOperate"
+            :can-operate="canOperate"
+            :mode-status="anomalyModeStatus"
             @dispose-alarm="applyAlarmStatus"
+            @send-command="handleSendCommand"
           />
         </aside>
       </section>
@@ -868,6 +1006,7 @@ onUnmounted(() => {
   background: linear-gradient(180deg, rgba(15, 23, 42, 0.94), rgba(8, 18, 33, 0.94));
   border: 1px solid rgba(56, 189, 248, 0.28);
   border-radius: 8px;
+  overflow: visible;
   padding: 28px;
   box-shadow: 0 20px 48px rgba(2, 8, 23, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }

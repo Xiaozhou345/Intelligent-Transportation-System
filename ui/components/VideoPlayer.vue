@@ -44,6 +44,8 @@ let hls = null
 let peerConnection = null
 let whepResourceUrl = ''
 let webrtcFallbackTimer = null
+let webrtcFrameTimer = null
+let receivedVideoFrame = false
 
 const calculateVideoViewport = () => {
   const video = videoRef.value
@@ -79,6 +81,10 @@ const destroyWebrtc = async () => {
     window.clearTimeout(webrtcFallbackTimer)
     webrtcFallbackTimer = null
   }
+  if (webrtcFrameTimer) {
+    window.clearTimeout(webrtcFrameTimer)
+    webrtcFrameTimer = null
+  }
   if (whepResourceUrl) {
     fetch(whepResourceUrl, { method: 'DELETE' }).catch(() => {})
     whepResourceUrl = ''
@@ -87,6 +93,42 @@ const destroyWebrtc = async () => {
     peerConnection.close()
     peerConnection = null
   }
+}
+
+const fallbackToHls = async (reason) => {
+  console.warn(reason)
+  await destroyWebrtc()
+  loadHlsSource()
+}
+
+const markVideoFrameReceived = () => {
+  receivedVideoFrame = true
+  if (webrtcFrameTimer) {
+    window.clearTimeout(webrtcFrameTimer)
+    webrtcFrameTimer = null
+  }
+}
+
+const watchForWebrtcFirstFrame = () => {
+  const video = videoRef.value
+  if (!video) return
+
+  receivedVideoFrame = false
+  if ('requestVideoFrameCallback' in video) {
+    video.requestVideoFrameCallback(() => {
+      markVideoFrameReceived()
+    })
+  }
+
+  if (webrtcFrameTimer) {
+    window.clearTimeout(webrtcFrameTimer)
+  }
+  webrtcFrameTimer = window.setTimeout(() => {
+    if (playbackProtocol.value !== 'WebRTC' || receivedVideoFrame) return
+    if (video.readyState < 2 || !video.videoWidth || !video.videoHeight) {
+      fallbackToHls('WebRTC 已连接但未收到可渲染视频帧，回退到 HLS')
+    }
+  }, 5000)
 }
 
 const waitForIceGathering = (pc) => {
@@ -175,6 +217,7 @@ const loadWebrtcSource = async () => {
       video.srcObject = stream
       playbackProtocol.value = 'WebRTC'
       video.play().catch(() => {})
+      watchForWebrtcFirstFrame()
     }
   }
 
@@ -189,16 +232,14 @@ const loadWebrtcSource = async () => {
     if (pc.connectionState === 'disconnected' && !webrtcFallbackTimer) {
       webrtcFallbackTimer = window.setTimeout(() => {
         if (peerConnection === pc && pc.connectionState === 'disconnected') {
-          console.warn('WebRTC 播放长时间断开，回退到 HLS')
-          loadHlsSource()
+          fallbackToHls('WebRTC 播放长时间断开，回退到 HLS')
         }
       }, 5000)
       return
     }
 
     if (pc.connectionState === 'failed') {
-      console.warn('WebRTC 播放连接失败，回退到 HLS')
-      loadHlsSource()
+      fallbackToHls('WebRTC 播放连接失败，回退到 HLS')
     }
   }
 
@@ -395,6 +436,10 @@ const handleLoadedMetadata = () => {
   }
 }
 
+const handleLoadedData = () => {
+  markVideoFrameReceived()
+}
+
 const handleResize = () => {
   updateCanvasSize()
 }
@@ -450,6 +495,7 @@ defineExpose({
       muted
       playsinline
       @loadedmetadata="handleLoadedMetadata"
+      @loadeddata="handleLoadedData"
     />
     <div class="video-frame-guide" aria-hidden="true">
       <span></span>
