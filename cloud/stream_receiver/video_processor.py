@@ -546,6 +546,11 @@ class VideoProcessor:
         else:
             vehicles = self.vehicle_detector.detect(frame)
             tracked_vehicles = state["tracker"].update(vehicles)
+
+            # 如果检测结果为空，记录日志（可能是夜间、镜头遮挡、空旷路段）
+            if not vehicles and frame_count % 90 == 0:
+                print(f"⚠️  帧 {frame_count}: 车辆检测结果为空（可能原因：夜间、遮挡、空旷路段）")
+
             # 使用tracked_vehicles而非vehicles构建掩膜，确保数据一致性
             # 同时保持高置信度过滤，避免低置信度车辆被误报为道路异常
             vehicle_bboxes = [
@@ -828,15 +833,25 @@ class VideoProcessor:
         if invalid_bbox_count > 0:
             print(f"⚠️  跳过 {invalid_bbox_count} 个无效bbox（格式错误或坐标异常）")
 
-        # 只发送有车辆的网格（减少数据量）
+        # 如果没有车辆，返回空regions数组而非None，确保前端状态一致
+        # 前端可以区分：None=未发送事件，空数组=检测为空
+        regions = []
         if not grid_counts:
-            return None
+            # 仍然返回事件，但regions为空，表示"检测完成但无车辆"
+            return {
+                "event_type": "traffic_density",
+                "timestamp": timestamp,
+                "device_id": device_id,
+                "status": "normal",
+                "data": {
+                    "regions": [],
+                },
+            }
 
         thresholds = state.get("traffic_thresholds", {"smooth_max": 2, "slow_max": 5})
         smooth_max = thresholds.get("smooth_max", 2)
         slow_max = thresholds.get("slow_max", 5)
 
-        regions = []
         for (row, col), count in grid_counts.items():
             # 计算网格的四个角坐标
             x1 = col * cell_width
