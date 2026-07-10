@@ -69,12 +69,9 @@ const closeDialog = () => {
 
     <template v-else>
     <template v-if="user">
-      <div class="user-meta">
-        <span>{{ user.username }}</span>
-        <ElTag :type="roleMap[user.role]?.type || 'info'" size="small">
-          {{ roleMap[user.role]?.label || user.role }}
-        </ElTag>
-      </div>
+      <ElTag :type="roleMap[user.role]?.type || 'info'" size="small" style="height: 32px; line-height: 30px; padding: 0 12px;">
+        {{ roleMap[user.role]?.label || user.role }}
+      </ElTag>
       <ElButton size="small" plain style="height: 32px; padding: 0 15px; border-radius: 8px; line-height: 30px;" @click="emit('logout')">退出</ElButton>
     </template>
     <ElButton v-else size="small" type="primary" @click="emit('update:visible', true)">登录</ElButton>

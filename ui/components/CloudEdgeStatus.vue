@@ -70,21 +70,18 @@ const shortUrl = (url) => {
 
     <div class="pipeline">
       <div class="node">
-        <div class="node-icon">EDGE</div>
         <div class="node-title">边端设备</div>
         <div class="node-value">{{ edgeDevice?.device_id || '未接入' }}</div>
         <div class="node-meta">{{ onlineDevices }}/{{ devices.length }} 在线</div>
       </div>
       <div class="flow-line"></div>
       <div class="node">
-        <div class="node-icon">AI</div>
         <div class="node-title">云端服务</div>
         <div class="node-value">{{ shortUrl(serverUrl) }}</div>
         <div class="node-meta">重连 {{ reconnectCount }} 次</div>
       </div>
       <div class="flow-line"></div>
       <div class="node">
-        <div class="node-icon">UI</div>
         <div class="node-title">前端大屏</div>
         <div class="node-value">{{ activeSceneLabel }}</div>
         <div class="node-meta">实时展示</div>
@@ -174,22 +171,7 @@ const shortUrl = (url) => {
   padding: 12px;
   background: rgba(15, 23, 42, 0.62);
   box-shadow: inset 0 0 20px rgba(14, 165, 233, 0.06);
-}
-
-.node-icon {
-  align-items: center;
-  background: linear-gradient(135deg, rgba(34, 211, 238, 0.22), rgba(37, 99, 235, 0.24));
-  border: 1px solid rgba(125, 211, 252, 0.35);
-  border-radius: 6px;
-  color: #67e8f9;
-  display: inline-flex;
-  font-size: 11px;
-  font-weight: 800;
-  height: 26px;
-  justify-content: center;
-  margin-bottom: 8px;
-  min-width: 38px;
-  padding: 0 8px;
+  text-align: center;
 }
 
 .node-title {
