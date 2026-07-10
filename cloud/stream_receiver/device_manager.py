@@ -5,8 +5,16 @@
 from datetime import datetime
 from typing import Dict, Optional
 import threading
+import os
+import sys
 
-from cloud.database import mysql_client
+# 添加父目录到Python路径以支持database模块导入
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+CLOUD_DIR = os.path.dirname(CURRENT_DIR)
+if CLOUD_DIR not in sys.path:
+    sys.path.insert(0, CLOUD_DIR)
+
+from database import mysql_client
 
 
 class Device:

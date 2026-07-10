@@ -14,13 +14,16 @@ from queue import Queue
 current_dir = os.path.dirname(os.path.abspath(__file__))
 ai_models_dir = os.path.join(current_dir, '..', 'ai_models')
 plate_detection_dir = os.path.join(ai_models_dir, 'plate_detection')
+cloud_dir = os.path.dirname(current_dir)
 
 sys.path.insert(0, ai_models_dir)
 sys.path.insert(0, plate_detection_dir)
+if cloud_dir not in sys.path:
+    sys.path.insert(0, cloud_dir)
 
 from plate_detection.detector import PlateDetector
 from plate_recognition.plate_recognizer import PlateRecognizer
-from cloud.database import mysql_client
+from database import mysql_client
 
 
 class PlateRecognitionProcessor:

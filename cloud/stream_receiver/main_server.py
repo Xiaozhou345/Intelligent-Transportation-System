@@ -7,7 +7,6 @@ from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 from device_manager import DeviceManager
 from video_processor import VideoProcessor
-from cloud.database import mysql_client
 from datetime import datetime
 import os
 import platform
@@ -15,6 +14,15 @@ from pathlib import Path
 import shutil
 import subprocess
 import time
+import sys
+
+# 添加父目录到Python路径以支持database模块导入
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+CLOUD_DIR = os.path.dirname(CURRENT_DIR)
+if CLOUD_DIR not in sys.path:
+    sys.path.insert(0, CLOUD_DIR)
+
+from database import mysql_client
 
 try:
     import psutil

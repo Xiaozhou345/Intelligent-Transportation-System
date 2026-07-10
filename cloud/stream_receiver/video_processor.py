@@ -41,8 +41,15 @@ from detector import VehicleDetector
 from vehicle_tracker import VehicleTracker
 from illegal_parking import IllegalParkingMonitor
 from plate_detection.detector import PlateDetector
-from plate_recognition.recognizer import PlateRecognizer
-from cloud.database import mysql_client
+from plate_recognition.plate_recognizer import PlateRecognizer
+
+# 添加父目录到Python路径以支持database模块导入
+CURRENT_DIR_VP = os.path.dirname(os.path.abspath(__file__))
+CLOUD_DIR_VP = os.path.dirname(CURRENT_DIR_VP)
+if CLOUD_DIR_VP not in sys.path:
+    sys.path.insert(0, CLOUD_DIR_VP)
+
+from database import mysql_client
 
 
 class VideoProcessor:
