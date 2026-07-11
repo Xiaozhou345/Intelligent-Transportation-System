@@ -21,6 +21,96 @@ CHARS = ['京', '沪', '津', '渝', '冀', '晋', '蒙', '辽', '吉', '黑',
          ]
 
 CHARS_DICT = {char: i for i, char in enumerate(CHARS)}
+BLANK_INDEX = len(CHARS) - 1
+PROVINCE_CHARS = set(CHARS[:31])
+LETTER_CHARS = set("ABCDEFGHJKLMNPQRSTUVWXYZ")
+PLATE_TAIL_CHARS = set("ABCDEFGHJKLMNPQRSTUVWXYZ0123456789")
+
+
+def crop_plate_image(frame, bbox, pad_ratio=0.0):
+    """Crop a plate bbox with optional margin and clipped image bounds."""
+    if frame is None or frame.size == 0:
+        return None
+
+    h, w = frame.shape[:2]
+    x1, y1, x2, y2 = [int(v) for v in bbox]
+    bw = max(0, x2 - x1)
+    bh = max(0, y2 - y1)
+    if bw == 0 or bh == 0:
+        return None
+
+    pad_x = max(2, int(round(bw * pad_ratio))) if pad_ratio > 0 else 0
+    pad_y = max(2, int(round(bh * pad_ratio))) if pad_ratio > 0 else 0
+    x1 = max(0, x1 - pad_x)
+    y1 = max(0, y1 - pad_y)
+    x2 = min(w, x2 + pad_x)
+    y2 = min(h, y2 + pad_y)
+
+    if x2 <= x1 or y2 <= y1:
+        return None
+    return frame[y1:y2, x1:x2]
+
+
+def refine_plate_crop_by_blue_region(plate_img):
+    """Tighten a blue plate crop using its blue background when available."""
+    if plate_img is None or plate_img.size == 0:
+        return None
+
+    hsv = cv2.cvtColor(plate_img, cv2.COLOR_BGR2HSV)
+    lower_blue = np.array([90, 40, 30])
+    upper_blue = np.array([135, 255, 255])
+    mask = cv2.inRange(hsv, lower_blue, upper_blue)
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return None
+
+    contour = max(contours, key=cv2.contourArea)
+    area = cv2.contourArea(contour)
+    image_area = plate_img.shape[0] * plate_img.shape[1]
+    if image_area <= 0 or area / image_area < 0.15:
+        return None
+
+    x, y, w, h = cv2.boundingRect(contour)
+    if w < 20 or h < 8:
+        return None
+
+    pad = 2
+    x1 = max(0, x - pad)
+    y1 = max(0, y - pad)
+    x2 = min(plate_img.shape[1], x + w + pad)
+    y2 = min(plate_img.shape[0], y + h + pad)
+    if x2 <= x1 or y2 <= y1:
+        return None
+    return plate_img[y1:y2, x1:x2]
+
+
+def normalize_plate_number(plate_number):
+    """Normalize OCR text before validation and cache matching."""
+    if not plate_number:
+        return ""
+    return str(plate_number).strip().replace("-", "").replace(" ", "").upper()
+
+
+def is_valid_plate_number(plate_number):
+    """Validate common mainland China fuel/new-energy plate formats."""
+    plate_number = normalize_plate_number(plate_number)
+    if len(plate_number) not in (7, 8):
+        return False
+    if plate_number[0] not in PROVINCE_CHARS:
+        return False
+    if plate_number[1] not in LETTER_CHARS:
+        return False
+    return all(char in PLATE_TAIL_CHARS for char in plate_number[2:])
+
+
+def is_ocr_candidate_crop(plate_img, min_height=30, min_aspect=1.0):
+    """Reject tiny or vertical crops before OCR to reduce obvious false reads."""
+    if plate_img is None or plate_img.size == 0:
+        return False
+    h, w = plate_img.shape[:2]
+    if h < min_height:
+        return False
+    return (w / max(h, 1)) >= min_aspect
 
 
 class small_basic_block(nn.Module):
@@ -197,17 +287,14 @@ class PlateRecognizer:
         Returns:
             str: 车牌号字符串
         """
-        # 贪心解码
+        # CTC greedy decode: remove blanks and collapse repeated chars.
         logits = logits.cpu().detach().numpy()
         pred = np.argmax(logits, axis=1)[0]
 
-        # 去重连续相同的字符
         plate_chars = []
-        pre_c = pred[0]
-        plate_chars.append(CHARS[pre_c])
-
-        for c in pred[1:]:
-            if c != pre_c and c != len(CHARS) - 1:  # 不是重复且不是'-'
+        pre_c = BLANK_INDEX
+        for c in pred:
+            if c != pre_c and c != BLANK_INDEX:
                 plate_chars.append(CHARS[c])
             pre_c = c
 
@@ -234,6 +321,21 @@ class PlateRecognizer:
         # 解码
         plate_number = self.decode(logits)
 
+        return plate_number
+
+    def recognize_best(self, plate_img):
+        """Recognize with a conservative blue-region retry for blue plates."""
+        plate_number = normalize_plate_number(self.recognize(plate_img))
+        if is_valid_plate_number(plate_number):
+            return plate_number
+
+        refined_img = refine_plate_crop_by_blue_region(plate_img)
+        if refined_img is None:
+            return plate_number
+
+        refined_number = normalize_plate_number(self.recognize(refined_img))
+        if is_valid_plate_number(refined_number):
+            return refined_number
         return plate_number
 
 

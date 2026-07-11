@@ -41,7 +41,13 @@ from detector import VehicleDetector
 from vehicle_tracker import VehicleTracker
 from illegal_parking import IllegalParkingMonitor
 from plate_detection.detector import PlateDetector
-from plate_recognition.plate_recognizer import PlateRecognizer
+from plate_recognition.plate_recognizer import (
+    PlateRecognizer,
+    crop_plate_image,
+    is_ocr_candidate_crop,
+    is_valid_plate_number,
+    normalize_plate_number,
+)
 
 # 添加父目录到Python路径以支持database模块导入
 CURRENT_DIR_VP = os.path.dirname(os.path.abspath(__file__))
@@ -403,6 +409,10 @@ class VideoProcessor:
 
         current_time = time.time()
         # 添加新识别结果
+        plate_number = normalize_plate_number(plate_number)
+        if not is_valid_plate_number(plate_number):
+            return
+
         self.plate_cache[device_id].append((bbox, plate_number, current_time))
 
         # 清理超过30秒的旧缓存
@@ -433,8 +443,7 @@ class VideoProcessor:
         cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
 
         # 找最近的匹配（IoU > 0.3 或中心点距离很近）
-        best_match = None
-        best_score = 0
+        candidate_scores = {}
 
         for cached_bbox, plate_number, timestamp in self.plate_cache[device_id]:
             bx1, by1, bx2, by2 = cached_bbox
@@ -462,11 +471,14 @@ class VideoProcessor:
             # 综合评分：IoU权重更高
             score = iou * 0.7 + (1.0 - min(normalized_distance, 1.0)) * 0.3
 
-            if score > best_score and score > 0.3:
-                best_score = score
-                best_match = plate_number
+            if score > 0.3:
+                age = max(0.0, time.time() - timestamp)
+                recency_weight = max(0.2, 1.0 - age / 30.0)
+                candidate_scores[plate_number] = candidate_scores.get(plate_number, 0.0) + score * recency_weight
 
-        return best_match or ""
+        if not candidate_scores:
+            return ""
+        return max(candidate_scores.items(), key=lambda item: item[1])[0]
 
     def _process_stream(self, device_id, stream_url, stop_event):
         cap = None
@@ -671,25 +683,18 @@ class VideoProcessor:
 
                 # 如果有LPRNet，立即识别车牌号
                 if self.plate_recognizer:
-                    x1, y1, x2, y2 = bbox
-                    # 确保坐标在图像范围内
-                    h, w = frame.shape[:2]
-                    x1, y1 = max(0, x1), max(0, y1)
-                    x2, y2 = min(w, x2), min(h, y2)
-
-                    if x2 > x1 and y2 > y1:
-                        plate_img = frame[y1:y2, x1:x2]
-                        if plate_img.size > 0:
-                            try:
-                                recognized = self.plate_recognizer.recognize(plate_img)
-                                plate_recognition_count += 1
-                                # 如果识别成功，更新缓存
-                                if recognized and len(recognized.strip()) >= 4:
-                                    plate_number = recognized
-                                    self.update_plate_number(device_id, bbox, plate_number)
-                            except Exception as e:
-                                # 记录所有OCR错误（不只是每30帧），便于诊断模型问题
-                                print(f"⚠️  车牌OCR失败 (frame {frame_count}): {str(e)}")
+                    plate_img = crop_plate_image(frame, bbox)
+                    if is_ocr_candidate_crop(plate_img):
+                        try:
+                            plate_recognition_count += 1
+                            plate_number = self.plate_recognizer.recognize_best(plate_img)
+                            # 如果识别成功，更新缓存
+                            if is_valid_plate_number(plate_number):
+                                self.update_plate_number(device_id, bbox, plate_number)
+                            else:
+                                plate_number = ""
+                        except Exception as e:
+                            print(f"⚠️  车牌OCR失败 (frame {frame_count}): {str(e)}")
 
                 # 如果没有识别出来，尝试从缓存匹配
                 if not plate_number:

@@ -9,7 +9,11 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from cloud.ai_models.plate_detection.detector import PlateDetector
-from cloud.ai_models.plate_recognition.plate_recognizer import PlateRecognizer
+from cloud.ai_models.plate_recognition.plate_recognizer import (
+    PlateRecognizer,
+    crop_plate_image,
+    is_ocr_candidate_crop,
+)
 
 
 def main():
@@ -58,15 +62,14 @@ def main():
         return
 
     for i, plate in enumerate(plates, 1):
-        x1, y1, x2, y2 = plate['bbox']
-        crop = img[y1:y2, x1:x2]
+        crop = crop_plate_image(img, plate['bbox'])
 
-        if crop is None or crop.size == 0:
-            print(f"\n车牌 #{i} 裁剪为空，跳过")
+        if not is_ocr_candidate_crop(crop):
+            print(f"\n车牌 #{i} 裁剪尺寸异常，跳过OCR")
             continue
 
         try:
-            text = plate_recognizer.recognize(crop)
+            text = plate_recognizer.recognize_best(crop)
         except Exception as e:
             text = f"OCR失败: {e}"
 

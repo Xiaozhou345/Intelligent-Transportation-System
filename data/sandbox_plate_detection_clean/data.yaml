@@ -1,0 +1,6 @@
+path: D:/大二下小学期/Intelligent-Transportation-System/data/sandbox_plate_detection_clean
+train: images/train
+val: images/val
+
+names:
+  0: plate

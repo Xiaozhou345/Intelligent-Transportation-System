@@ -22,7 +22,13 @@ if cloud_dir not in sys.path:
     sys.path.insert(0, cloud_dir)
 
 from plate_detection.detector import PlateDetector
-from plate_recognition.plate_recognizer import PlateRecognizer
+from plate_recognition.plate_recognizer import (
+    PlateRecognizer,
+    crop_plate_image,
+    is_ocr_candidate_crop,
+    is_valid_plate_number,
+    normalize_plate_number,
+)
 from database import mysql_client
 
 
@@ -243,21 +249,20 @@ class PlateRecognitionProcessor:
 
             for idx, plate in enumerate(plates):
                 bbox = plate['bbox']
-                x1, y1, x2, y2 = bbox
-                plate_img = frame[y1:y2, x1:x2]
+                plate_img = crop_plate_image(frame, bbox)
 
-                if plate_img is None or plate_img.size == 0:
-                    print(f"⚠️  车牌 #{idx + 1} 裁剪为空，跳过")
+                if not is_ocr_candidate_crop(plate_img):
+                    print(f"⚠️  车牌 #{idx + 1} 裁剪尺寸异常，跳过OCR")
                     continue
 
                 try:
-                    plate_number = self.plate_recognizer.recognize(plate_img)
+                    plate_number = self.plate_recognizer.recognize_best(plate_img)
                 except Exception as e:
                     print(f"⚠️  车牌 #{idx + 1} OCR 失败: {str(e)}")
                     continue
 
-                if not plate_number or len(plate_number.strip()) < 4:
-                    print(f"⚠️  车牌 #{idx + 1} OCR 结果过短: {plate_number!r}")
+                if not is_valid_plate_number(plate_number):
+                    print(f"⚠️  车牌 #{idx + 1} OCR 结果格式异常: {plate_number!r}")
                     continue
 
                 result = {
