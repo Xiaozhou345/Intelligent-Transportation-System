@@ -507,19 +507,43 @@ class VideoProcessor:
             last_buffer_clear_time = time.time()
             buffer_clear_interval = 0.5  # 每0.5秒清理一次缓冲区（从2秒大幅降低）
 
+            # 性能监控：视频流读取统计
+            stream_perf = {
+                'buffer_clear_count': 0,
+                'buffer_clear_total_time': 0,
+                'frame_read_count': 0,
+                'frame_read_total_time': 0,
+                'frame_decode_count': 0,
+                'last_report_time': time.time()
+            }
+
             while not stop_event.is_set():
+                loop_start = time.time()
+
                 # 对于实时流：高频清空缓冲区，只处理最新帧
                 if not is_local_file:
                     current_time = time.time()
                     if current_time - last_buffer_clear_time >= buffer_clear_interval:
+                        # 性能监控：缓冲区清理耗时
+                        clear_start = time.time()
+
                         # 快速抓取并丢弃缓冲区中的旧帧（不解码）
                         # 注意：OpenCV的缓冲区大小通常是5-10帧
                         buffer_size = int(cap.get(cv2.CAP_PROP_BUFFERSIZE)) if cap.get(cv2.CAP_PROP_BUFFERSIZE) > 0 else 5
                         for _ in range(buffer_size - 1):
                             cap.grab()  # 只抓取不解码，非常快
+
+                        clear_time = (time.time() - clear_start) * 1000
+                        stream_perf['buffer_clear_count'] += 1
+                        stream_perf['buffer_clear_total_time'] += clear_time
                         last_buffer_clear_time = current_time
 
+                # 性能监控：读帧耗时
+                read_start = time.time()
                 ret, frame = cap.read()
+                read_time = (time.time() - read_start) * 1000
+                stream_perf['frame_read_total_time'] += read_time
+                stream_perf['frame_read_count'] += 1
 
                 if not ret:
                     consecutive_read_failures += 1
@@ -534,6 +558,36 @@ class VideoProcessor:
                 frame_count += 1
                 if frame_count % self.frame_skip != 0:
                     continue
+
+                # 统计解码帧数（实际用于AI分析的帧）
+                stream_perf['frame_decode_count'] += 1
+
+                # 每30秒输出一次视频流性能统计
+                current_time = time.time()
+                if current_time - stream_perf['last_report_time'] >= 30:
+                    avg_read_time = stream_perf['frame_read_total_time'] / stream_perf['frame_read_count'] if stream_perf['frame_read_count'] > 0 else 0
+                    avg_clear_time = stream_perf['buffer_clear_total_time'] / stream_perf['buffer_clear_count'] if stream_perf['buffer_clear_count'] > 0 else 0
+                    fps = stream_perf['frame_read_count'] / 30.0
+                    decode_fps = stream_perf['frame_decode_count'] / 30.0
+
+                    print(f"\n{'='*80}")
+                    print(f"📹 视频流性能统计 - {device_id}")
+                    print(f"{'='*80}")
+                    print(f"🎥 视频源: {stream_url}")
+                    print(f"📊 读取帧率: {fps:.2f} fps  (原始)")
+                    print(f"📊 处理帧率: {decode_fps:.2f} fps  (经过frame_skip={self.frame_skip})")
+                    print(f"⏱️  平均读帧耗时: {avg_read_time:.2f} ms")
+                    print(f"⏱️  平均缓冲清理耗时: {avg_clear_time:.2f} ms")
+                    print(f"🧹 缓冲清理次数: {stream_perf['buffer_clear_count']} 次/30秒")
+                    print(f"{'='*80}\n")
+
+                    # 重置统计
+                    stream_perf['buffer_clear_count'] = 0
+                    stream_perf['buffer_clear_total_time'] = 0
+                    stream_perf['frame_read_count'] = 0
+                    stream_perf['frame_read_total_time'] = 0
+                    stream_perf['frame_decode_count'] = 0
+                    stream_perf['last_report_time'] = current_time
 
                 self._analyze_frame(device_id, frame, frame_count)
                 # 删除了 time.sleep(0.1)，让处理循环以最快速度运行
