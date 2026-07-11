@@ -198,7 +198,7 @@ RTMP 手机推流 App 容易引入 5 秒以上缓冲，当前推荐改用支持 
 8890/UDP
 8888
 8889
-8189/UDP
+8189/TCP + UDP
 8554
 ```
 
@@ -329,6 +329,23 @@ rtsp://106.54.10.11:8554/live/mobile_001
 如果 API 能打开，说明 `5000` 转发正常。
 如果手机开始推流后前端 WebRTC 有画面，说明 `8889` 和 `8189/UDP` 链路正常。
 如果 WebRTC 不通但 HLS 地址能打开，前端会自动回退到 HLS，但延迟会更高。
+
+### 生产环境安全配置
+
+默认配置用于本地/沙盘演示。将 API 暴露到公网前，至少设置：
+
+```powershell
+$env:ITS_SECRET_KEY = "一个长随机字符串"
+$env:ITS_ALLOWED_ORIGINS = "https://your-frontend.example.com"
+$env:ITS_MAX_UPLOAD_MB = "100"
+$env:ITS_DB_PASSWORD = "你的MySQL密码"  # 仅在启用MySQL时需要
+$env:ITS_API_TOKEN = "一个独立的长随机API令牌"
+```
+
+`ITS_ALLOWED_ORIGINS` 可以是英文逗号分隔的多个前端地址。同时应替换 `deploy/frp/*.toml`
+中的演示令牌，并保证 frps 与 frpc 使用相同的新令牌。
+API 令牌启用后，边端 JSON 配置需增加 `"api_token": "..."`，前端构建环境需设置
+`VITE_API_TOKEN=...`。不设置 `ITS_API_TOKEN` 时保持原有沙盘演示行为。
 
 常见问题：
 

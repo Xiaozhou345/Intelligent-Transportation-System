@@ -60,13 +60,16 @@ def timestamp() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def post_json(base_url: str, path: str, payload: Dict[str, Any], timeout: int) -> Dict[str, Any]:
+def post_json(base_url: str, path: str, payload: Dict[str, Any], timeout: int, api_token: str = "") -> Dict[str, Any]:
     url = f"{normalize_base_url(base_url)}{path}"
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    if api_token:
+        headers["X-API-Key"] = api_token
     request = Request(
         url,
         data=body,
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method="POST",
     )
 
@@ -126,7 +129,7 @@ def cmd_register(config: Dict[str, Any]) -> int:
         config["cloud_api_base"],
         "/api/register_device",
         register_payload(config),
-        int(config.get("request_timeout_seconds", 5)),
+        int(config.get("request_timeout_seconds", 5)), config.get("api_token", ""),
     )
     print_response("register", response)
     return 0 if 200 <= response["http_status"] < 300 else 1
@@ -137,7 +140,7 @@ def cmd_heartbeat(config: Dict[str, Any]) -> int:
         config["cloud_api_base"],
         "/api/heartbeat",
         heartbeat_payload(config),
-        int(config.get("request_timeout_seconds", 5)),
+        int(config.get("request_timeout_seconds", 5)), config.get("api_token", ""),
     )
     print_response("heartbeat", response)
     return 0 if 200 <= response["http_status"] < 300 else 1
@@ -153,7 +156,7 @@ def cmd_watch(config: Dict[str, Any]) -> int:
                 config["cloud_api_base"],
                 "/api/register_device",
                 register_payload(config),
-                timeout,
+                timeout, config.get("api_token", ""),
             )
             print_response("register", register_result)
             if 200 <= register_result["http_status"] < 300:
@@ -173,7 +176,7 @@ def cmd_watch(config: Dict[str, Any]) -> int:
                     config["cloud_api_base"],
                     "/api/heartbeat",
                     heartbeat_payload(config),
-                    timeout,
+                    timeout, config.get("api_token", ""),
                 )
                 print_response("heartbeat", response)
             except ConnectionError as error:
@@ -188,7 +191,7 @@ def cmd_unregister(config: Dict[str, Any]) -> int:
         config["cloud_api_base"],
         "/api/unregister_device",
         {"device_id": config["device_id"]},
-        int(config.get("request_timeout_seconds", 5)),
+        int(config.get("request_timeout_seconds", 5)), config.get("api_token", ""),
     )
     print_response("unregister", response)
     return 0 if 200 <= response["http_status"] < 300 else 1

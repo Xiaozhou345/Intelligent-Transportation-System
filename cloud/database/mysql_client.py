@@ -17,7 +17,8 @@ DB_SETTINGS = {
     'host': os.getenv('ITS_DB_HOST', '127.0.0.1'),
     'port': int(os.getenv('ITS_DB_PORT', '3306')),
     'user': os.getenv('ITS_DB_USER', 'root'),
-    'password': os.getenv('ITS_DB_PASSWORD', 'mysql2026'),
+    # 不在代码中提供可猜测的生产密码；本地无密码 MySQL 仍可显式留空。
+    'password': os.getenv('ITS_DB_PASSWORD', ''),
     'database': os.getenv('ITS_DB_NAME', 'intelligent_transportation_system'),
     'charset': 'utf8mb4',
     'cursorclass': DictCursor,

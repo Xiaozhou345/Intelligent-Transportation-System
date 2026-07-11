@@ -34,9 +34,13 @@ def compile_key_files() -> None:
 
 
 def test_anomaly_processor() -> None:
-    from cloud.stream_receiver.test_anomaly_processor import main
+    import unittest
+    from cloud.stream_receiver.test_anomaly_processor import RoadAnomalyProcessorTest
 
-    main()
+    suite = unittest.defaultTestLoader.loadTestsFromTestCase(RoadAnomalyProcessorTest)
+    result = unittest.TextTestRunner(verbosity=1).run(suite)
+    if not result.wasSuccessful():
+        raise AssertionError("road anomaly smoke tests failed")
 
 
 def test_main_server_health_and_upload() -> None:
@@ -64,6 +68,22 @@ def test_main_server_health_and_upload() -> None:
     )
     assert upload.status_code == 200, upload.get_data(as_text=True)
     assert upload.get_json()["status"] == "success"
+
+    invalid_registration = client.post(
+        "/api/register_device",
+        json={"device_id": "../bad", "stream_url": "file:///etc/passwd"},
+    )
+    assert invalid_registration.status_code == 400
+
+    invalid_upload = client.post(
+        "/api/video/upload",
+        data={
+            "device_id": "../bad",
+            "video": (io.BytesIO(b"not-a-video"), "payload.exe"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert invalid_upload.status_code == 400
 
 
 def main() -> int:

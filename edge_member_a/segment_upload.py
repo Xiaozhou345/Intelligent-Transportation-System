@@ -73,10 +73,13 @@ def upload(config: Dict[str, Any], video_path: Path) -> Dict[str, Any]:
     }
     body, boundary = encode_multipart(fields, "video", video_path)
 
+    headers = {"Content-Type": f"multipart/form-data; boundary={boundary}"}
+    if config.get("api_token"):
+        headers["X-API-Key"] = config["api_token"]
     request = Request(
         url,
         data=body,
-        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        headers=headers,
         method="POST",
     )
 

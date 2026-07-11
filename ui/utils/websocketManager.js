@@ -151,6 +151,7 @@ class WebSocketManager {
 
     try {
       this.ws = io(this.url, {
+        auth: { token: import.meta.env.VITE_API_TOKEN || '' },
         // 允许 polling 握手/降级，再自动升级到 WebSocket。
         // 部分 FRP/Nginx 未正确转发 Upgrade 头时，强制 websocket 会完全无法连接。
         transports: ['polling', 'websocket'],

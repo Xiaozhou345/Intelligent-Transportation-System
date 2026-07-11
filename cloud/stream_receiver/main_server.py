@@ -10,11 +10,15 @@ from video_processor import VideoProcessor
 from datetime import datetime
 import os
 import platform
+import re
+import secrets
+import hmac
 from pathlib import Path
 import shutil
 import subprocess
 import time
 import sys
+from urllib.parse import urlparse
 
 # 添加父目录到Python路径以支持database模块导入
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -32,13 +36,19 @@ except ImportError:
 
 # 创建Flask应用
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'intelligent-transportation-system-2026'
-CORS(app, resources={r"/*": {"origins": "*"}})
+app.config['SECRET_KEY'] = os.getenv('ITS_SECRET_KEY') or secrets.token_hex(32)
+app.config['MAX_CONTENT_LENGTH'] = int(os.getenv('ITS_MAX_UPLOAD_MB', '100')) * 1024 * 1024
+ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv('ITS_ALLOWED_ORIGINS', '*').split(',')
+    if origin.strip()
+]
+CORS(app, resources={r"/*": {"origins": ALLOWED_ORIGINS}})
 
 # 创建SocketIO实例（使用threading模式 + simple-websocket后端）
 socketio = SocketIO(
     app,
-    cors_allowed_origins="*",
+    cors_allowed_origins=ALLOWED_ORIGINS,
     async_mode='threading',
     logger=False,
     engineio_logger=False
@@ -49,6 +59,48 @@ device_manager = DeviceManager()
 video_processor = VideoProcessor(device_manager, socketio)
 UPLOAD_DIR = Path(__file__).resolve().parents[2] / "data" / "uploads" / "video_segments"
 PROCESS_STARTED_AT = time.time()
+DEVICE_ID_PATTERN = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$')
+ALLOWED_STREAM_SCHEMES = {'rtsp', 'rtmp', 'srt', 'http', 'https'}
+ALLOWED_VIDEO_EXTENSIONS = {'.mp4', '.mov', '.avi', '.mkv', '.flv', '.webm'}
+API_TOKEN = os.getenv('ITS_API_TOKEN', '').strip()
+
+
+def _valid_device_id(value):
+    return isinstance(value, str) and DEVICE_ID_PATTERN.fullmatch(value) is not None
+
+
+def _valid_stream_url(value):
+    if not isinstance(value, str) or len(value) > 2048:
+        return False
+    parsed = urlparse(value)
+    return parsed.scheme.lower() in ALLOWED_STREAM_SCHEMES and bool(parsed.hostname)
+
+
+@app.errorhandler(413)
+def upload_too_large(_error):
+    return jsonify({
+        "status": "error",
+        "message": f"上传文件超过 {app.config['MAX_CONTENT_LENGTH'] // 1024 // 1024} MB 限制",
+    }), 413
+
+
+def _request_token():
+    bearer = request.headers.get('Authorization', '')
+    if bearer.lower().startswith('bearer '):
+        return bearer[7:].strip()
+    return request.headers.get('X-API-Key', '').strip()
+
+
+@app.before_request
+def protect_mutating_api_routes():
+    """配置 ITS_API_TOKEN 后保护所有会修改状态的 API；未配置时保持演示兼容。"""
+    if not API_TOKEN or not request.path.startswith('/api/'):
+        return None
+    if request.method not in {'POST', 'PUT', 'PATCH', 'DELETE'}:
+        return None
+    if not hmac.compare_digest(_request_token(), API_TOKEN):
+        return jsonify({"status": "error", "message": "unauthorized"}), 401
+    return None
 
 
 def _safe_percent(value):
@@ -121,7 +173,7 @@ def collect_system_status():
 def register_device():
     """设备注册接口"""
     try:
-        data = request.json
+        data = request.get_json(silent=True) or {}
 
         # 必需字段
         device_id = data.get('device_id')
@@ -141,6 +193,21 @@ def register_device():
                 "status": "error",
                 "message": "缺少必需字段：device_id 或 stream_url"
             }), 400
+        if not _valid_device_id(device_id):
+            return jsonify({"status": "error", "message": "device_id格式无效"}), 400
+        if not _valid_stream_url(stream_url):
+            return jsonify({"status": "error", "message": "stream_url仅支持有效的RTSP/RTMP/SRT/HTTP(S)地址"}), 400
+        try:
+            fps = int(fps)
+        except (TypeError, ValueError):
+            return jsonify({"status": "error", "message": "fps必须为整数"}), 400
+        if not 1 <= fps <= 120:
+            return jsonify({"status": "error", "message": "fps必须在1到120之间"}), 400
+
+        previous_device = device_manager.get_device(device_id)
+        stream_changed = previous_device is not None and previous_device.stream_url != stream_url
+        if stream_changed:
+            video_processor.stop_processing(device_id)
 
         # 注册设备
         success = device_manager.register_device(
@@ -180,7 +247,7 @@ def register_device():
 def unregister_device():
     """设备注销接口"""
     try:
-        data = request.json
+        data = request.get_json(silent=True) or {}
         device_id = data.get('device_id')
 
         if not device_id:
@@ -217,7 +284,7 @@ def unregister_device():
 def heartbeat():
     """心跳接口"""
     try:
-        data = request.json
+        data = request.get_json(silent=True) or {}
         device_id = data.get('device_id')
 
         if not device_id:
@@ -225,6 +292,10 @@ def heartbeat():
                 "status": "error",
                 "message": "缺少device_id字段"
             }), 400
+        if not _valid_device_id(device_id):
+            return jsonify({"status": "error", "message": "device_id格式无效"}), 400
+        if not _valid_device_id(device_id):
+            return jsonify({"status": "error", "message": "device_id格式无效"}), 400
 
         success = device_manager.update_heartbeat(device_id)
 
@@ -314,7 +385,7 @@ def health_check():
             "host": mysql_client.DB_SETTINGS['host'],
             "port": mysql_client.DB_SETTINGS['port'],
             "name": mysql_client.DB_SETTINGS['database'],
-            "error": None if db_ok else mysql_client.get_last_error(),
+            "error": None if db_ok else "database unavailable",
         },
     }), 200
 
@@ -342,6 +413,8 @@ def upload_video_segment():
                 "status": "error",
                 "message": "缺少device_id字段"
             }), 400
+        if not _valid_device_id(device_id):
+            return jsonify({"status": "error", "message": "device_id格式无效"}), 400
 
         file = request.files.get('video')
         if not file or not file.filename:
@@ -352,7 +425,7 @@ def upload_video_segment():
 
         original_name = Path(file.filename).name
         extension = Path(original_name).suffix.lower()
-        if extension not in {'.mp4', '.mov', '.avi', '.mkv', '.flv', '.webm'}:
+        if extension not in ALLOWED_VIDEO_EXTENSIONS:
             return jsonify({
                 "status": "error",
                 "message": f"不支持的视频格式: {extension or 'unknown'}"
@@ -372,7 +445,6 @@ def upload_video_segment():
             "codec": request.form.get('codec', 'H.264'),
             "original_filename": original_name,
             "saved_filename": saved_name,
-            "saved_path": str(saved_path),
             "size_bytes": saved_path.stat().st_size,
         }
 
@@ -455,8 +527,12 @@ def system_status_background_task():
 
 
 @socketio.on('connect')
-def handle_connect():
+def handle_connect(auth=None):
     """前端连接事件"""
+    if API_TOKEN:
+        supplied_token = (auth or {}).get('token', '')
+        if not hmac.compare_digest(str(supplied_token), API_TOKEN):
+            return False
     print(f"前端客户端已连接")
     emit('connection_status', {'status': 'connected', 'message': '已连接到云端服务器'})
     # 立即推送一次系统状态
