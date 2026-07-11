@@ -24,7 +24,7 @@ flask-cors>=4.0.0
 flask-socketio>=5.3.0
 python-socketio>=5.10.0
 python-engineio>=4.8.0
-eventlet>=0.33.0
+simple-websocket>=0.10.0
 pymysql>=1.1.0
 
 # 可选：GPU加速

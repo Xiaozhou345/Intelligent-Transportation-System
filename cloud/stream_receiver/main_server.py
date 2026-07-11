@@ -35,8 +35,14 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = 'intelligent-transportation-system-2026'
 CORS(app, resources={r"/*": {"origins": "*"}})
 
-# 创建SocketIO实例（使用eventlet异步模式，解决WebSocket握手问题）
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
+# 创建SocketIO实例（使用threading模式 + simple-websocket后端）
+socketio = SocketIO(
+    app,
+    cors_allowed_origins="*",
+    async_mode='threading',
+    logger=False,
+    engineio_logger=False
+)
 
 # 创建设备管理器和视频处理器
 device_manager = DeviceManager()
