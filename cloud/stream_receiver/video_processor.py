@@ -61,7 +61,7 @@ class VideoProcessor:
         self.active_streams = {}  # {device_id: thread}
         self.stop_flags = {}  # {device_id: stop_event}
 
-        self.frame_skip = int(os.getenv("ITS_FRAME_SKIP", "10"))
+        self.frame_skip = int(os.getenv("ITS_FRAME_SKIP", "3"))
         self.enable_mock_fallback = os.getenv("ITS_ENABLE_MOCK_FALLBACK", "true").lower() == "true"
         self.disable_vehicle_mask = os.getenv("ITS_DISABLE_VEHICLE_MASK", "false").lower() == "true"
         self.vehicle_mask_min_conf = float(os.getenv("ITS_VEHICLE_MASK_MIN_CONF", "0.65"))
@@ -75,6 +75,10 @@ class VideoProcessor:
         self.plate_recognizer = None
         self.vehicle_conf = float(os.getenv("ITS_VEHICLE_CONF", "0.50"))
         self.plate_conf = float(os.getenv("ITS_PLATE_CONF", "0.20"))
+
+        # 性能优化参数
+        self.plate_recognition_skip = int(os.getenv("ITS_PLATE_RECOGNITION_SKIP", "3"))
+        self.overlay_push_skip = int(os.getenv("ITS_OVERLAY_PUSH_SKIP", "2"))
 
         # 车牌号缓存：{device_id: [(bbox, plate_number, timestamp), ...]}
         self.plate_cache: Dict[str, List[tuple]] = {}
@@ -498,13 +502,13 @@ class VideoProcessor:
 
             print(f"成功连接视频流: {device_id}")
 
-            # 缓冲区清理策略：定期检查并跳过积压的旧帧，确保读取最新帧
+            # 缓冲区清理策略：高频检查并跳过积压的旧帧，确保读取最新帧
             # 这对于实时流（RTSP/RTMP）至关重要，可大幅降低延迟
             last_buffer_clear_time = time.time()
-            buffer_clear_interval = 2.0  # 每2秒清理一次缓冲区
+            buffer_clear_interval = 0.5  # 每0.5秒清理一次缓冲区（从2秒大幅降低）
 
             while not stop_event.is_set():
-                # 对于实时流：定期清空缓冲区，只处理最新帧
+                # 对于实时流：高频清空缓冲区，只处理最新帧
                 if not is_local_file:
                     current_time = time.time()
                     if current_time - last_buffer_clear_time >= buffer_clear_interval:
@@ -582,7 +586,9 @@ class VideoProcessor:
             ]
 
         plate_events = []
-        if self.plate_detector:
+        if self.plate_detector and state["processed_frames"] % self.plate_recognition_skip == 0:
+            # 车牌识别性能优化：不需要每帧都识别，降低频率（默认每3帧识别一次）
+            # 因为车牌识别（LPRNet）是最耗时的操作之一（50-100ms/车牌）
             detected_plates = self.plate_detector.detect(frame)
             for plate in detected_plates:
                 bbox = plate["bbox"]
@@ -793,13 +799,18 @@ class VideoProcessor:
             anomaly_events=anomaly_events,
             plate_events=plate_events,
         )
-        print(
-            f"帧 {frame_count}: video_overlay vehicles={len(overlay['data']['vehicles'])} "
-            f"plates={len(overlay['data']['plates'])} illegal={len(overlay['data']['illegal_parking'])} "
-            f"anomalies={len(overlay['data']['road_anomalies'])} "
-            f"no_parking_zones={len(overlay['data']['no_parking_zones'])}"
-        )
-        self._send_result(overlay)
+
+        # 性能优化：降低video_overlay推送频率，避免WebSocket拥塞
+        # 默认每2个处理帧推送一次（而不是每个处理帧都推送）
+        # 这样可以减少网络传输压力，降低前端渲染压力
+        if state["processed_frames"] % self.overlay_push_skip == 0:
+            print(
+                f"帧 {frame_count}: video_overlay vehicles={len(overlay['data']['vehicles'])} "
+                f"plates={len(overlay['data']['plates'])} illegal={len(overlay['data']['illegal_parking'])} "
+                f"anomalies={len(overlay['data']['road_anomalies'])} "
+                f"no_parking_zones={len(overlay['data']['no_parking_zones'])}"
+            )
+            self._send_result(overlay)
 
     def _build_traffic_density_event(self, device_id, state, tracked_vehicles, timestamp):
         emit_every = max(1, int(state.get("density_emit_every_processed_frames", 3)))
