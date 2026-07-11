@@ -554,6 +554,10 @@ class VideoProcessor:
             print(f"⚠️  帧 {frame_count} 无效（frame为空或size=0），跳过分析")
             return
 
+        # ============ 性能监控：记录总耗时 ============
+        frame_start_time = time.time()
+        perf_timings = {}  # 记录各步骤耗时
+
         timestamp = datetime.now().isoformat()
         state = self._get_or_create_runtime_state(device_id, frame.shape)
         state["processed_frames"] += 1
@@ -570,13 +574,22 @@ class VideoProcessor:
             tracked_vehicles = []
             vehicle_bboxes = []
         else:
+            # ============ 步骤1：车辆检测 ============
+            step_start = time.time()
             vehicles = self.vehicle_detector.detect(frame)
+            perf_timings['vehicle_detection'] = (time.time() - step_start) * 1000  # 转为毫秒
+
+            # ============ 步骤2：车辆跟踪 ============
+            step_start = time.time()
             tracked_vehicles = state["tracker"].update(vehicles)
+            perf_timings['vehicle_tracking'] = (time.time() - step_start) * 1000
 
             # 如果检测结果为空，记录日志（可能是夜间、镜头遮挡、空旷路段）
             if not vehicles and frame_count % 90 == 0:
                 print(f"⚠️  帧 {frame_count}: 车辆检测结果为空（可能原因：夜间、遮挡、空旷路段）")
 
+            # ============ 步骤3：车辆掩膜计算 ============
+            step_start = time.time()
             # 使用tracked_vehicles而非vehicles构建掩膜，确保数据一致性
             # 同时保持高置信度过滤，避免低置信度车辆被误报为道路异常
             vehicle_bboxes = [
@@ -584,12 +597,20 @@ class VideoProcessor:
                 for tracked in tracked_vehicles
                 if tracked.get("confidence", 0) >= self.vehicle_mask_min_conf
             ]
+            perf_timings['vehicle_mask'] = (time.time() - step_start) * 1000
 
+        # ============ 步骤4：车牌检测+识别 ============
         plate_events = []
         if self.plate_detector and state["processed_frames"] % self.plate_recognition_skip == 0:
+            step_start = time.time()
             # 车牌识别性能优化：不需要每帧都识别，降低频率（默认每3帧识别一次）
             # 因为车牌识别（LPRNet）是最耗时的操作之一（50-100ms/车牌）
             detected_plates = self.plate_detector.detect(frame)
+            perf_timings['plate_detection'] = (time.time() - step_start) * 1000
+
+            # 车牌识别（LPRNet）
+            step_start = time.time()
+            plate_recognition_count = 0
             for plate in detected_plates:
                 bbox = plate["bbox"]
                 plate_number = ""
@@ -607,6 +628,7 @@ class VideoProcessor:
                         if plate_img.size > 0:
                             try:
                                 recognized = self.plate_recognizer.recognize(plate_img)
+                                plate_recognition_count += 1
                                 # 如果识别成功，更新缓存
                                 if recognized and len(recognized.strip()) >= 4:
                                     plate_number = recognized
@@ -638,6 +660,13 @@ class VideoProcessor:
                         # "decision": "unknown",
                     },
                 })
+
+            if plate_recognition_count > 0:
+                perf_timings['plate_recognition'] = (time.time() - step_start) * 1000
+                perf_timings['plate_recognition_per_plate'] = perf_timings['plate_recognition'] / plate_recognition_count
+        else:
+            perf_timings['plate_detection'] = 0
+            perf_timings['plate_recognition'] = 0
 
         # 将车牌识别结果发送到前端（仅在相关场景下发送，保持与其他事件的一致性）
         if active_scene in ['vehicle_detection', 'plate_recognition']:
@@ -706,12 +735,17 @@ class VideoProcessor:
                     "status": "detected",
                 })
 
+        # ============ 步骤5：热力图计算 ============
+        step_start = time.time()
         # 热力图事件：基于同一份YOLO检测结果，与车辆检测保持数据一致性
         # 在vehicle_detection和traffic_density场景下都发送，确保前端数据同步
         traffic_event = self._build_traffic_density_event(device_id, state, tracked_vehicles, timestamp)
         if traffic_event is not None and active_scene in ['traffic_density', 'vehicle_detection']:
             self._send_result(traffic_event)
+        perf_timings['traffic_density'] = (time.time() - step_start) * 1000
 
+        # ============ 步骤6：违停监控 ============
+        step_start = time.time()
         parking_events = state["parking_monitor"].update(device_id, tracked_vehicles, timestamp)
         if active_scene == 'illegal_parking':
             for event in parking_events:
@@ -720,9 +754,12 @@ class VideoProcessor:
                     f"违停告警: track_id={event['data'].get('track_id')} "
                     f"stay_time={event['data'].get('stay_time')}s bbox={event.get('bbox')}"
                 )
+        perf_timings['illegal_parking'] = (time.time() - step_start) * 1000
 
+        # ============ 步骤7：道路异常检测 ============
         anomaly_events = []
         if self.anomaly_processor and active_scene == 'road_anomaly':
+            step_start = time.time()
             anomaly_mode = state.get("anomaly_mode", "detecting")
             if anomaly_mode == "background_learning":
                 road_mask = self.anomaly_processor.predict_road_mask(frame)
@@ -788,6 +825,12 @@ class VideoProcessor:
                     self._save_debug_frame(frame, frame_count, vehicle_bboxes, anomaly_events)
                     self._save_road_mask_debug(frame, frame_count)
 
+            perf_timings['road_anomaly'] = (time.time() - step_start) * 1000
+        else:
+            perf_timings['road_anomaly'] = 0
+
+        # ============ 步骤8：构建video_overlay ============
+        step_start = time.time()
         overlay = self._build_video_overlay(
             device_id=device_id,
             timestamp=timestamp,
@@ -799,18 +842,55 @@ class VideoProcessor:
             anomaly_events=anomaly_events,
             plate_events=plate_events,
         )
+        perf_timings['build_overlay'] = (time.time() - step_start) * 1000
 
+        # ============ 步骤9：推送overlay ============
+        step_start = time.time()
         # 性能优化：降低video_overlay推送频率，避免WebSocket拥塞
         # 默认每2个处理帧推送一次（而不是每个处理帧都推送）
         # 这样可以减少网络传输压力，降低前端渲染压力
         if state["processed_frames"] % self.overlay_push_skip == 0:
+            self._send_result(overlay)
+            perf_timings['push_overlay'] = (time.time() - step_start) * 1000
+        else:
+            perf_timings['push_overlay'] = 0  # 跳过推送
+
+        # ============ 性能监控：输出总耗时 ============
+        total_time = (time.time() - frame_start_time) * 1000
+        perf_timings['total'] = total_time
+
+        # 每10个处理帧输出一次详细性能报告
+        if state["processed_frames"] % 10 == 0:
+            print(f"\n{'='*80}")
+            print(f"🔍 性能监控报告 - 帧 {frame_count} (处理帧 {state['processed_frames']})")
+            print(f"{'='*80}")
+            print(f"📌 场景: {active_scene}")
+            print(f"📌 车辆数: {len(tracked_vehicles)}  车牌数: {len(plate_events)}")
+            print(f"\n⏱️  各步骤耗时详情:")
+            print(f"  1️⃣  车辆检测 (YOLO):       {perf_timings.get('vehicle_detection', 0):7.2f} ms")
+            print(f"  2️⃣  车辆跟踪 (ByteTrack):   {perf_timings.get('vehicle_tracking', 0):7.2f} ms")
+            print(f"  3️⃣  车辆掩膜计算:           {perf_timings.get('vehicle_mask', 0):7.2f} ms")
+            print(f"  4️⃣  车牌检测 (YOLO):       {perf_timings.get('plate_detection', 0):7.2f} ms")
+            if perf_timings.get('plate_recognition', 0) > 0:
+                print(f"  5️⃣  车牌识别 (LPRNet):     {perf_timings.get('plate_recognition', 0):7.2f} ms  (单个: {perf_timings.get('plate_recognition_per_plate', 0):.2f} ms)")
+            else:
+                print(f"  5️⃣  车牌识别 (跳过本帧)")
+            print(f"  6️⃣  热力图计算:             {perf_timings.get('traffic_density', 0):7.2f} ms")
+            print(f"  7️⃣  违停监控:               {perf_timings.get('illegal_parking', 0):7.2f} ms")
+            print(f"  8️⃣  道路异常检测:           {perf_timings.get('road_anomaly', 0):7.2f} ms")
+            print(f"  9️⃣  构建overlay:            {perf_timings.get('build_overlay', 0):7.2f} ms")
+            print(f"  🔟 推送overlay:            {perf_timings.get('push_overlay', 0):7.2f} ms")
+            print(f"\n  {'🎯 总耗时:':<25} {total_time:7.2f} ms")
+            print(f"{'='*80}\n")
+        else:
+            # 非详细输出帧，只输出简短信息
             print(
                 f"帧 {frame_count}: video_overlay vehicles={len(overlay['data']['vehicles'])} "
                 f"plates={len(overlay['data']['plates'])} illegal={len(overlay['data']['illegal_parking'])} "
                 f"anomalies={len(overlay['data']['road_anomalies'])} "
-                f"no_parking_zones={len(overlay['data']['no_parking_zones'])}"
+                f"no_parking_zones={len(overlay['data']['no_parking_zones'])} | "
+                f"总耗时: {total_time:.2f}ms"
             )
-            self._send_result(overlay)
 
     def _build_traffic_density_event(self, device_id, state, tracked_vehicles, timestamp):
         emit_every = max(1, int(state.get("density_emit_every_processed_frames", 3)))
