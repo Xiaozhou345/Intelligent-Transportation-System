@@ -9,6 +9,9 @@
 4. 道路异常检测中的车辆掩膜
 """
 import cv2
+import numpy as np
+import struct
+import subprocess
 import threading
 import time
 from queue import Empty, Full, Queue
@@ -57,6 +60,24 @@ if CLOUD_DIR_VP not in sys.path:
     sys.path.insert(0, CLOUD_DIR_VP)
 
 from database import mysql_client
+
+
+FRAME_HEADER = struct.Struct("<4sIIId")
+FRAME_MAGIC = b"ITSF"
+MAX_CAPTURE_FRAME_BYTES = 64 * 1024 * 1024
+
+
+def _read_exact(stream, size):
+    """Read exactly size bytes from a subprocess pipe, or None at EOF."""
+    chunks = []
+    remaining = size
+    while remaining > 0:
+        chunk = stream.read(remaining)
+        if not chunk:
+            return None
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
 
 
 class VideoProcessor:
@@ -209,6 +230,7 @@ class VideoProcessor:
 
                 # 尝试加载车牌识别模型（LPRNet）
                 lprnet_candidates = [
+                    os.path.join(AI_MODELS_DIR, "plate_recognition", "sandbox_lprnet_best.pth"),
                     os.path.join(AI_MODELS_DIR, "plate_recognition", "Final_LPRNet_model.pth"),
                     os.path.join(REPO_ROOT, "models", "lprnet_best.pth"),
                 ]
@@ -277,6 +299,11 @@ class VideoProcessor:
                 "anomaly_mode": self.runtime_defaults.get("anomaly_mode", "detecting"),
                 "anomaly_background_frames": 0,
                 "anomaly_background_skipped_frames": 0,
+                "last_plate_events": [],
+                "stream_connected": False,
+                "last_frame_received_at": None,
+                "last_frame_analyzed_at": None,
+                "stream_reconnect_count": 0,
             }
             self.runtime_state[device_id] = state
 
@@ -351,8 +378,13 @@ class VideoProcessor:
 
     def start_processing(self, device_id, stream_url):
         if device_id in self.active_streams:
-            print(f"设备 {device_id} 已在处理中")
-            return False
+            existing_thread = self.active_streams[device_id]
+            if existing_thread.is_alive():
+                print(f"设备 {device_id} 已在处理中")
+                return False
+            self.active_streams.pop(device_id, None)
+            self.stop_flags.pop(device_id, None)
+            print(f"设备 {device_id} 的旧处理线程已退出，正在重新启动")
 
         stop_event = threading.Event()
         self.stop_flags[device_id] = stop_event
@@ -618,29 +650,36 @@ class VideoProcessor:
                 cap.release()
             print(f"视频流处理结束: {device_id}")
 
-    def _open_live_capture(self, stream_url):
-        """以低延迟、有超时的方式打开实时流。"""
-        params = []
-        for prop, env_name, default in (
-            (getattr(cv2, "CAP_PROP_OPEN_TIMEOUT_MSEC", None), "ITS_STREAM_OPEN_TIMEOUT_MS", 5000),
-            (getattr(cv2, "CAP_PROP_READ_TIMEOUT_MSEC", None), "ITS_STREAM_READ_TIMEOUT_MS", 5000),
-        ):
-            if prop is not None:
-                params.extend([prop, int(os.getenv(env_name, str(default)))])
-
-        try:
-            cap = cv2.VideoCapture(stream_url, cv2.CAP_FFMPEG, params)
-        except (TypeError, cv2.error):
-            cap = cv2.VideoCapture(stream_url)
-
-        # 部分 OpenCV/FFmpeg 构建识别 API 但不接受超时参数，用普通方式再试一次。
-        if not cap.isOpened() and params:
-            cap.release()
-            cap = cv2.VideoCapture(stream_url)
-
-        if cap.isOpened():
-            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        return cap
+    def _start_capture_worker(self, stream_url, failures_before_reconnect):
+        """Start the isolated OpenCV process that owns the RTSP connection."""
+        worker_path = Path(__file__).with_name("rtsp_capture_worker.py")
+        command = [
+            sys.executable,
+            "-u",
+            str(worker_path),
+            stream_url,
+            "--open-timeout-ms",
+            os.getenv("ITS_STREAM_OPEN_TIMEOUT_MS", "5000"),
+            "--read-timeout-ms",
+            os.getenv("ITS_STREAM_READ_TIMEOUT_MS", "5000"),
+            "--read-failures",
+            str(failures_before_reconnect),
+            "--failure-grace-seconds",
+            os.getenv("ITS_STREAM_FAILURE_GRACE", "6"),
+            "--send-every",
+            os.getenv("ITS_CAPTURE_FRAME_SKIP", "2"),
+        ]
+        creationflags = 0
+        if os.name == "nt":
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        return subprocess.Popen(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0,
+            creationflags=creationflags,
+        )
 
     def _process_live_stream(self, device_id, stream_url, stop_event):
         """
@@ -650,6 +689,7 @@ class VideoProcessor:
         latest_frame = Queue(maxsize=1)
         failures_before_reconnect = max(1, int(os.getenv("ITS_STREAM_READ_FAILURES", "5")))
         reconnect_delay = max(0.2, float(os.getenv("ITS_STREAM_RECONNECT_DELAY", "1")))
+        stall_timeout = max(3.0, float(os.getenv("ITS_STREAM_STALL_TIMEOUT", "10")))
 
         def publish_latest(item):
             try:
@@ -667,39 +707,113 @@ class VideoProcessor:
         def capture_loop():
             sequence = 0
             attempt = 0
-            while not stop_event.is_set():
-                cap = self._open_live_capture(stream_url)
-                if not cap.isOpened():
-                    cap.release()
-                    attempt += 1
-                    if attempt == 1 or attempt % 5 == 0:
-                        print(f"视频流尚未可读: {stream_url} (第 {attempt} 次重连)")
-                    stop_event.wait(reconnect_delay)
-                    continue
+            connected_once = False
+            state = self._get_or_create_runtime_state(device_id)
 
-                if attempt:
-                    print(f"视频流已重连: {device_id}")
-                else:
-                    print(f"成功连接视频流: {device_id}")
-                attempt = 0
-                read_failures = 0
+            while not stop_event.is_set():
+                process = self._start_capture_worker(stream_url, failures_before_reconnect)
+                reader_done = threading.Event()
+                first_frame = threading.Event()
+                last_frame_time = {"value": time.monotonic()}
+                session_error = {"value": "采集进程已结束"}
+
+                def read_worker_frames():
+                    nonlocal sequence, connected_once, attempt
+                    try:
+                        while not stop_event.is_set():
+                            header_data = _read_exact(process.stdout, FRAME_HEADER.size)
+                            if header_data is None:
+                                break
+                            magic, width, height, channels, captured_at = FRAME_HEADER.unpack(header_data)
+                            payload_size = int(width) * int(height) * int(channels)
+                            if (
+                                magic != FRAME_MAGIC
+                                or width <= 0
+                                or height <= 0
+                                or channels not in (1, 3, 4)
+                                or payload_size > MAX_CAPTURE_FRAME_BYTES
+                            ):
+                                session_error["value"] = "采集进程返回了无效帧"
+                                break
+
+                            payload = _read_exact(process.stdout, payload_size)
+                            if payload is None:
+                                session_error["value"] = "采集进程输出中断"
+                                break
+
+                            if not first_frame.is_set():
+                                if connected_once:
+                                    print(f"视频流已重连: {device_id}")
+                                else:
+                                    print(f"成功连接视频流: {device_id}")
+                                connected_once = True
+                                attempt = 0
+                                first_frame.set()
+
+                            frame = np.frombuffer(payload, dtype=np.uint8)
+                            if channels == 1:
+                                frame = frame.reshape((height, width))
+                            else:
+                                frame = frame.reshape((height, width, channels))
+
+                            received_at = time.monotonic()
+                            last_frame_time["value"] = received_at
+                            state["stream_connected"] = True
+                            state["last_frame_received_at"] = time.time()
+                            sequence += 1
+                            publish_latest((sequence, frame, captured_at))
+                    except Exception as exc:
+                        session_error["value"] = f"采集管道异常: {exc}"
+                    finally:
+                        reader_done.set()
+
+                session_reader = threading.Thread(
+                    target=read_worker_frames,
+                    name=f"video-pipe-{device_id}",
+                    daemon=True,
+                )
+                session_reader.start()
 
                 while not stop_event.is_set():
-                    ok, frame = cap.read()
-                    if not ok or frame is None or frame.size == 0:
-                        read_failures += 1
-                        if read_failures >= failures_before_reconnect:
-                            print(f"视频流 {device_id} 连续读取失败，正在重连")
-                            break
-                        stop_event.wait(0.05)
-                        continue
+                    if reader_done.wait(timeout=0.25):
+                        return_code = process.poll()
+                        session_error["value"] = f"采集进程退出 (code={return_code})"
+                        break
+                    stalled_for = time.monotonic() - last_frame_time["value"]
+                    if stalled_for >= stall_timeout:
+                        session_error["value"] = f"{stalled_for:.1f} 秒未收到新帧"
+                        break
 
-                    read_failures = 0
-                    sequence += 1
-                    publish_latest((sequence, frame, time.monotonic()))
+                state["stream_connected"] = False
+                if process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=2)
 
-                cap.release()
+                session_reader.join(timeout=2)
+                stderr_text = ""
+                try:
+                    stderr_text = process.stderr.read().decode("utf-8", errors="replace").strip()
+                except (AttributeError, OSError):
+                    pass
+                finally:
+                    for pipe in (process.stdout, process.stderr):
+                        try:
+                            pipe.close()
+                        except (AttributeError, OSError):
+                            pass
+
                 if not stop_event.is_set():
+                    attempt += 1
+                    state["stream_reconnect_count"] = state.get("stream_reconnect_count", 0) + 1
+                    detail = session_error["value"]
+                    if stderr_text:
+                        detail = f"{detail}; {stderr_text.splitlines()[-1]}"
+                    if first_frame.is_set() or attempt == 1 or attempt % 5 == 0:
+                        print(f"视频流 {device_id} 停滞 ({detail})，正在重建采集进程")
                     stop_event.wait(reconnect_delay)
 
 
@@ -727,7 +841,12 @@ class VideoProcessor:
                 analyzed_count += 1
                 state = self._get_or_create_runtime_state(device_id, frame.shape)
                 state["capture_to_analysis_ms"] = round((time.monotonic() - captured_at) * 1000, 1)
-                self._analyze_frame(device_id, frame, sequence)
+                try:
+                    self._analyze_frame(device_id, frame, sequence)
+                    state["last_frame_analyzed_at"] = time.time()
+                except Exception as frame_exc:
+                    print(f"单帧分析异常 {device_id}: {frame_exc}，继续处理后续帧")
+                    self._send_error(device_id, str(frame_exc))
         except Exception as exc:
             print(f"视频流处理异常 {device_id}: {exc}")
             self._send_error(device_id, str(exc))
@@ -789,7 +908,13 @@ class VideoProcessor:
 
         # ============ 步骤4：车牌检测+识别 ============
         plate_events = []
-        if self.plate_detector and state["processed_frames"] % self.plate_recognition_skip == 0:
+        plates_refreshed = False
+        plate_scene_enabled = active_scene in {'vehicle_detection', 'plate_recognition'}
+        if (
+            plate_scene_enabled
+            and self.plate_detector
+            and state["processed_frames"] % self.plate_recognition_skip == 0
+        ):
             step_start = time.time()
             # 车牌识别性能优化：不需要每帧都识别，降低频率（默认每3帧识别一次）
             # 因为车牌识别（LPRNet）是最耗时的操作之一（50-100ms/车牌）
@@ -842,15 +967,22 @@ class VideoProcessor:
                     },
                 })
 
+            state["last_plate_events"] = plate_events
+            plates_refreshed = True
+
             if plate_recognition_count > 0:
                 perf_timings['plate_recognition'] = (time.time() - step_start) * 1000
                 perf_timings['plate_recognition_per_plate'] = perf_timings['plate_recognition'] / plate_recognition_count
+        elif plate_scene_enabled:
+            # Reuse the most recent boxes between inference passes so overlays do not blink.
+            plate_events = list(state.get("last_plate_events", []))
         else:
+            state["last_plate_events"] = []
             perf_timings['plate_detection'] = 0
             perf_timings['plate_recognition'] = 0
 
         # 将车牌识别结果发送到前端（仅在相关场景下发送，保持与其他事件的一致性）
-        if active_scene in ['vehicle_detection', 'plate_recognition']:
+        if plates_refreshed and active_scene in ['vehicle_detection', 'plate_recognition']:
             for plate_event in plate_events:
                 self._send_result(plate_event)
                 if frame_count % 30 == 0:
@@ -980,7 +1112,7 @@ class VideoProcessor:
                     })
                     print(
                         f"道路异常背景学习中: device={device_id} "
-                        f"frames={background_frames} skipped={skipped_frames} "
+                        f"frames={actual_background_frames} skipped={skipped_frames} "
                         f"vehicle_masks={len(vehicle_bboxes)}"
                     )
             else:
@@ -1289,6 +1421,21 @@ class VideoProcessor:
                 "enabled": self.anomaly_processor is not None,
             }
 
+        # 单设备演示未显式传 device_id 时，优先返回真实运行状态，避免
+        # 前端刷新后使用 runtime_defaults 中的旧场景。
+        if self.runtime_state:
+            first_device_id, state = next(iter(self.runtime_state.items()))
+            return {
+                "status": "success",
+                "device_id": first_device_id,
+                "mode": state.get("anomaly_mode", "detecting"),
+                "background_frames": state.get("anomaly_background_frames", 0),
+                "skipped_frames": state.get("anomaly_background_skipped_frames", 0),
+                "min_background_frames": int(self.runtime_defaults.get("anomaly_min_background_frames", 8)),
+                "active_scene": state.get("active_scene"),
+                "enabled": self.anomaly_processor is not None,
+            }
+
         # 使用anomaly_processor内部的真实计数器，确保准确性
         actual_background_frames = self.anomaly_processor.background_frames if self.anomaly_processor else 0
 
@@ -1565,7 +1712,11 @@ class VideoProcessor:
             print(f"发送错误信息失败: {str(e)}")
 
     def get_active_streams(self):
-        return list(self.active_streams.keys())
+        return [
+            device_id
+            for device_id, thread in self.active_streams.items()
+            if thread.is_alive()
+        ]
 
 
 if __name__ == '__main__':

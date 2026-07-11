@@ -5,6 +5,7 @@
 from ultralytics import YOLO
 import cv2
 import numpy as np
+import os
 
 
 class VehicleDetector:
@@ -28,8 +29,18 @@ class VehicleDetector:
         # 自动选择GPU或CPU
         import torch
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.imgsz = int(os.getenv('ITS_VEHICLE_IMGSZ', '640'))
+        self.use_half = (
+            self.device == 'cuda'
+            and os.getenv('ITS_ENABLE_FP16', 'true').lower() == 'true'
+        )
+        if self.device == 'cuda':
+            torch.backends.cudnn.benchmark = True
         self.model.to(self.device)
-        print(f"车辆检测器初始化完成 (设备: {self.device})")
+        print(
+            f"车辆检测器初始化完成 "
+            f"(设备: {self.device}, imgsz: {self.imgsz}, FP16: {self.use_half})"
+        )
     
     def detect(self, frame):
         """
@@ -48,7 +59,14 @@ class VehicleDetector:
                 }
         """
         # 使用YOLO进行推理
-        results = self.model.predict(source=frame, conf=self.conf_threshold, verbose=False)
+        results = self.model.predict(
+            source=frame,
+            conf=self.conf_threshold,
+            imgsz=self.imgsz,
+            device=self.device,
+            half=self.use_half,
+            verbose=False,
+        )
         
         # 解析检测结果
         detections = []
@@ -80,7 +98,14 @@ class VehicleDetector:
         Returns:
             list: 所有检测结果
         """
-        results = self.model.predict(source=frame, conf=self.conf_threshold, verbose=False)
+        results = self.model.predict(
+            source=frame,
+            conf=self.conf_threshold,
+            imgsz=self.imgsz,
+            device=self.device,
+            half=self.use_half,
+            verbose=False,
+        )
         
         detections = []
         for box in results[0].boxes:

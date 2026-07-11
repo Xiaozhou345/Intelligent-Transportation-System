@@ -37,9 +37,13 @@ let systemStatusTimer = null
 const videoPlayerRef = ref(null)
 const latestVideoOverlay = ref(null)
 
-const CLOUD_SERVER_URL = import.meta.env.VITE_CLOUD_SERVER_URL || 'http://106.54.10.11:15000'
+const PUBLIC_CLOUD_SERVER_URL = import.meta.env.VITE_CLOUD_SERVER_URL || 'http://106.54.10.11:15000'
+const LOCAL_API_PORT = import.meta.env.VITE_LOCAL_API_PORT || '5001'
+const CLOUD_SERVER_URL = window.location.port === '5173'
+  ? `${window.location.protocol}//${window.location.hostname}:${LOCAL_API_PORT}`
+  : PUBLIC_CLOUD_SERVER_URL
 const liveVideoSrc = import.meta.env.VITE_LIVE_VIDEO_URL || 'http://106.54.10.11:8888/live/mobile_001/index.m3u8'
-const liveWebrtcSrc = import.meta.env.VITE_LIVE_WEBRTC_URL || 'http://106.54.10.11:8889/live/mobile_001/whep'
+const liveWebrtcSrc = import.meta.env.VITE_LIVE_WEBRTC_URL ?? 'http://106.54.10.11:8889/live/mobile_001/whep'
 const liveWhipSrc = import.meta.env.VITE_LIVE_WHIP_URL || 'http://106.54.10.11:8889/live/mobile_001/whip'
 const isPublisherMode = window.location.pathname === '/publish' || new URLSearchParams(window.location.search).get('mode') === 'publisher'
 
@@ -414,6 +418,9 @@ const updateDeviceList = (devices = []) => {
 
 const handleAnomalyModeUpdated = (data) => {
   const payload = data.data || data
+  if (payload.active_scene && sceneTabs.some(scene => scene.value === payload.active_scene)) {
+    activeScene.value = payload.active_scene
+  }
   anomalyModeStatus.value = {
     ...anomalyModeStatus.value,
     ...payload
@@ -519,6 +526,11 @@ const routeEvent = (data) => {
     handleAnomalyModeUpdated(data)
   } else if (data.event_type === 'anomaly_calibration') {
     handleAnomalyCalibration(data)
+  } else if (data.event_type === 'scene_switched') {
+    const sceneId = data.data?.scene_id
+    if (sceneTabs.some(scene => scene.value === sceneId)) {
+      activeScene.value = sceneId
+    }
   } else if (data.event_type === 'devices_list') {
     updateDeviceList(data.data?.devices)
   }

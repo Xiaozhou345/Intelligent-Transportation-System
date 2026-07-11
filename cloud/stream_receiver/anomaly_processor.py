@@ -122,6 +122,11 @@ class RoadAnomalyProcessor:
             return None
         return self.drivable_segmenter.predict_mask(frame)
 
+    @property
+    def background_frames(self):
+        """Expose the detector's background-learning progress to the scheduler/API."""
+        return int(getattr(self.detector, "background_frames", 0))
+
     def reset(self):
         """Reset background model and cached results."""
         self.detector.reset()

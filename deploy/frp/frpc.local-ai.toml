@@ -11,7 +11,7 @@ log.maxDays = 3
 name = "its-api"
 type = "tcp"
 localIP = "127.0.0.1"
-localPort = 5000
+localPort = 5001
 remotePort = 15000
 
 [[proxies]]

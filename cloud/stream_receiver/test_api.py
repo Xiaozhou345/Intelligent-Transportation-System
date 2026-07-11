@@ -8,7 +8,7 @@ from datetime import datetime
 
 
 # 云端API地址（测试时用localhost，实际使用时改为你的电脑IP）
-BASE_URL = "http://localhost:5000"
+BASE_URL = "http://localhost:5001"
 
 
 def test_health_check():

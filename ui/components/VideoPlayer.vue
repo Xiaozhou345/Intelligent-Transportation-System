@@ -100,8 +100,14 @@ const destroyWebrtc = async () => {
 
 const fallbackToHls = async (reason) => {
   console.warn(reason)
+  const video = videoRef.value
+  const hlsIsAlreadyActive = Boolean(video && !video.srcObject && (hls || video.currentSrc))
   await destroyWebrtc()
-  loadHlsSource()
+  if (hlsIsAlreadyActive) {
+    playbackProtocol.value = 'HLS'
+  } else {
+    loadHlsSource()
+  }
 }
 
 const markVideoFrameReceived = () => {
@@ -128,10 +134,8 @@ const watchForWebrtcFirstFrame = () => {
   }
   webrtcFrameTimer = window.setTimeout(() => {
     if (playbackProtocol.value !== 'WebRTC' || receivedVideoFrame) return
-    if (video.readyState < 2 || !video.videoWidth || !video.videoHeight) {
-      fallbackToHls('WebRTC 已连接但未收到可渲染视频帧，回退到 HLS')
-    }
-  }, 5000)
+    fallbackToHls('WebRTC 已连接但未收到可渲染视频帧，回退到 HLS')
+  }, 6000)
 }
 
 const waitForIceGathering = (pc) => {
@@ -169,13 +173,13 @@ const loadHlsSource = () => {
   if (isHlsSource) {
     if (Hls.isSupported()) {
       hls = new Hls({
-        lowLatencyMode: true,
-        liveSyncDurationCount: 1,
-        liveMaxLatencyDurationCount: 3,
-        maxLiveSyncPlaybackRate: 1.5,
-        maxBufferLength: 3,
-        maxMaxBufferLength: 5,
-        backBufferLength: 3,
+        lowLatencyMode: false,
+        liveSyncDurationCount: 2,
+        liveMaxLatencyDurationCount: 5,
+        maxLiveSyncPlaybackRate: 1.08,
+        maxBufferLength: 8,
+        maxMaxBufferLength: 12,
+        backBufferLength: 4,
         liveDurationInfinity: true,
         highBufferWatchdogPeriod: 1,
         enableWorker: true
@@ -187,7 +191,7 @@ const loadHlsSource = () => {
       })
       hls.on(Hls.Events.LEVEL_LOADED, () => {
         const liveSyncPosition = hls.liveSyncPosition
-        if (Number.isFinite(liveSyncPosition) && video.currentTime < liveSyncPosition - 3) {
+        if (Number.isFinite(liveSyncPosition) && video.currentTime < liveSyncPosition - 2) {
           video.currentTime = liveSyncPosition
         }
       })
@@ -268,14 +272,22 @@ const loadWebrtcSource = async () => {
   await pc.setLocalDescription(offer)
   await waitForIceGathering(pc)
 
-  const response = await fetch(props.webrtcSrc, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/sdp',
-      'Accept': 'application/sdp'
-    },
-    body: pc.localDescription.sdp
-  })
+  const requestController = new AbortController()
+  const requestTimeout = window.setTimeout(() => requestController.abort(), 4000)
+  let response
+  try {
+    response = await fetch(props.webrtcSrc, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/sdp',
+        'Accept': 'application/sdp'
+      },
+      body: pc.localDescription.sdp,
+      signal: requestController.signal
+    })
+  } finally {
+    window.clearTimeout(requestTimeout)
+  }
 
   if (!response.ok) {
     throw new Error(`WHEP request failed: ${response.status}`)
@@ -298,18 +310,19 @@ const loadVideoSource = async () => {
   destroyHls()
   await destroyWebrtc()
   video.srcObject = null
+  loadHlsSource()
 
   if (props.webrtcSrc) {
     try {
-      playbackProtocol.value = 'WebRTC连接中'
+      playbackProtocol.value = 'HLS / WebRTC连接中'
       const loaded = await loadWebrtcSource()
       if (loaded) return
     } catch (error) {
       console.error('WebRTC 播放失败，回退到 HLS:', error)
+      await destroyWebrtc()
+      playbackProtocol.value = 'HLS'
     }
   }
-
-  loadHlsSource()
 }
 
 const updateCanvasSize = () => {
@@ -480,7 +493,8 @@ const startPlaybackWatchdog = () => {
     }
 
     stalledChecks += 1
-    if (stalledChecks < 3) return
+    const maxStalledChecks = playbackProtocol.value.startsWith('HLS') ? 5 : 3
+    if (stalledChecks < maxStalledChecks) return
     stalledChecks = 0
     console.warn('视频连续卡顿，正在重建播放连接')
     loadVideoSource()

@@ -87,8 +87,9 @@ def post_json(base_url: str, path: str, payload: Dict[str, Any], timeout: int, a
         except json.JSONDecodeError:
             body_data = {"raw": data}
         return {"http_status": error.code, "body": body_data}
-    except URLError as error:
-        raise ConnectionError(f"Cannot reach cloud API: {error.reason}") from error
+    except (URLError, TimeoutError, OSError) as error:
+        reason = getattr(error, "reason", str(error))
+        raise ConnectionError(f"Cannot reach cloud API: {reason}") from error
 
 
 def register_payload(config: Dict[str, Any]) -> Dict[str, Any]:
@@ -150,37 +151,43 @@ def cmd_watch(config: Dict[str, Any]) -> int:
     interval = int(config.get("heartbeat_interval_seconds", 10))
     timeout = int(config.get("request_timeout_seconds", 5))
 
-    while True:
-        try:
-            register_result = post_json(
-                config["cloud_api_base"],
-                "/api/register_device",
-                register_payload(config),
-                timeout, config.get("api_token", ""),
-            )
-            print_response("register", register_result)
-            if 200 <= register_result["http_status"] < 300:
-                break
-        except ConnectionError as error:
-            print(f"[register] {error}")
-
-        print(f"Register failed. Retry in {interval}s.")
-        time.sleep(interval)
-
-    print(f"Heartbeat started. Press Ctrl+C to stop. interval={interval}s")
     try:
         while True:
-            time.sleep(interval)
-            try:
-                response = post_json(
-                    config["cloud_api_base"],
-                    "/api/heartbeat",
-                    heartbeat_payload(config),
-                    timeout, config.get("api_token", ""),
-                )
-                print_response("heartbeat", response)
-            except ConnectionError as error:
-                print(f"[heartbeat] {error}. Retry in {interval}s.")
+            while True:
+                try:
+                    register_result = post_json(
+                        config["cloud_api_base"],
+                        "/api/register_device",
+                        register_payload(config),
+                        timeout,
+                        config.get("api_token", ""),
+                    )
+                    print_response("register", register_result)
+                    if 200 <= register_result["http_status"] < 300:
+                        break
+                except ConnectionError as error:
+                    print(f"[register] {error}")
+
+                print(f"Register failed. Retry in {interval}s.")
+                time.sleep(interval)
+
+            print(f"Heartbeat started. Press Ctrl+C to stop. interval={interval}s")
+            while True:
+                time.sleep(interval)
+                try:
+                    response = post_json(
+                        config["cloud_api_base"],
+                        "/api/heartbeat",
+                        heartbeat_payload(config),
+                        timeout,
+                        config.get("api_token", ""),
+                    )
+                    print_response("heartbeat", response)
+                    if response["http_status"] == 404:
+                        print("Device registration was lost. Registering again now.")
+                        break
+                except ConnectionError as error:
+                    print(f"[heartbeat] {error}. Retry in {interval}s.")
     except KeyboardInterrupt:
         print("\nHeartbeat stopped by user.")
         return 0

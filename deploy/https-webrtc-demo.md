@@ -60,7 +60,7 @@ cd D:\大二下小学期\Intelligent-Transportation-System
 
 ```text
 本地前端 5173 -> 云服务器 15173
-本地后端 5000 -> 云服务器 15000
+本地后端 5001 -> 云服务器 15000
 MediaMTX HTTP/WebRTC 8889 -> 云服务器 18889
 MediaMTX UDP/ICE 8189 -> 云服务器 8189/UDP
 ```

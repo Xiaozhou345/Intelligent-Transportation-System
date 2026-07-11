@@ -54,6 +54,34 @@ HLS 兜底:  http://106.54.10.11:8888/live/mobile_001/index.m3u8
 RTSP 拉流: rtsp://106.54.10.11:8554/live/mobile_001
 ```
 
+### 1.1 配置开机自启和异常重启
+
+不要把 MediaMTX 和 frps 长期留在 SSH 前台窗口中运行。确认二进制目录分别为
+`/home/ubuntu/mediamtx` 和 `/home/ubuntu/frp_0.69.1_linux_amd64` 后，将仓库中的服务文件安装到 systemd：
+
+```bash
+sudo cp deploy/mediamtx/its-mediamtx.service /etc/systemd/system/
+sudo cp deploy/frp/its-frps.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now its-mediamtx its-frps
+```
+
+检查服务和端口：
+
+```bash
+systemctl --no-pager --full status its-mediamtx its-frps
+ss -lntup | grep -E ':(7000|8554|8888|8889|8890|8189)\\b'
+```
+
+实时查看日志：
+
+```bash
+journalctl -u its-mediamtx -u its-frps -f
+```
+
+如果实际安装目录不同，先修改两个 `.service` 文件中的 `WorkingDirectory` 和
+`ExecStart`，再执行 `daemon-reload` 与 `restart`。
+
 ## 2.1 本地启动后端 AI 服务
 
 你的电脑仍然负责：
@@ -78,7 +106,7 @@ cloud\start-main-server.bat
 启动后，本地服务监听：
 
 ```text
-127.0.0.1:5000
+127.0.0.1:5001
 ```
 
 frpc 会把它暴露到云端：

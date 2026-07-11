@@ -552,7 +552,7 @@ def handle_disconnect():
 
 
 @socketio.on('request_devices')
-def handle_request_devices():
+def handle_request_devices(_data=None):
     """前端请求设备列表"""
     devices = device_manager.get_all_devices()
     device_list = [device.to_dict() for device in devices.values()]
@@ -634,10 +634,11 @@ def handle_switch_scene(data):
 # ==================== 启动服务器 ====================
 
 if __name__ == '__main__':
+    server_port = int(os.getenv('ITS_PORT', '5001'))
     print("=" * 60)
     print("云端智慧交通AI分析服务器启动")
     print("=" * 60)
-    print("\n✅ HTTP API 服务: http://0.0.0.0:5000")
+    print(f"\n✅ HTTP API 服务: http://0.0.0.0:{server_port}")
     print("   - POST   /api/register_device   - 设备注册")
     print("   - POST   /api/unregister_device - 设备注销")
     print("   - POST   /api/heartbeat         - 心跳上报")
@@ -645,7 +646,7 @@ if __name__ == '__main__':
     print("   - GET    /api/device/<id>       - 获取单个设备信息")
     print("   - GET    /api/health            - 健康检查")
     print("   - GET    /api/system/status     - 系统状态查询")
-    print("\n✅ WebSocket 服务: ws://0.0.0.0:5000/socket.io/")
+    print(f"\n✅ WebSocket 服务: ws://0.0.0.0:{server_port}/socket.io/")
     print("   - 事件: analysis_result  - AI分析结果推送")
     print("   - 事件: connection_status - 连接状态")
     print("   - 事件: devices_list     - 设备列表")
@@ -658,7 +659,7 @@ if __name__ == '__main__':
     print("   - CPU使用率、GPU使用率、内存使用率")
     print("   - 活跃设备数、视频流状态")
     print("\n📝 提供给边端的信息:")
-    print("   - HTTP API地址: http://<frp公网IP>:15000 或 http://<本机IP>:5000")
+    print(f"   - HTTP API地址: http://<frp公网IP>:15000 或 http://<本机IP>:{server_port}")
     print("   - SRT推流地址: srt://<云端IP>:8890?streamid=publish:live/<device_id>&latency=200")
     print("   - RTMP兜底地址: rtmp://<云端IP>:1935/live/<device_id>")
     print("   - AI拉流地址: rtsp://<云端IP>:8554/live/<device_id>")
@@ -670,4 +671,4 @@ if __name__ == '__main__':
     socketio.start_background_task(system_status_background_task)
 
     # 启动Flask-SocketIO服务
-    socketio.run(app, host='0.0.0.0', port=5000, debug=False, allow_unsafe_werkzeug=True)
+    socketio.run(app, host='0.0.0.0', port=server_port, debug=False, allow_unsafe_werkzeug=True)

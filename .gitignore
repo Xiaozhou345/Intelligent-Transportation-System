@@ -134,3 +134,19 @@ external_datasets/
 plate_test_output/
 plate_crop_*.jpg
 yolo26n.pt
+
+# Local plate-training and debug artifacts
+cloud/ai_models/plate_recognition/sandbox_lprnet_rejected.pth
+cloud/ai_models/plate_recognition/sandbox_video_lprnet_candidate.pth
+data/ccpd_plate_detection_smoke/
+data/ccpd_plate_ocr/
+data/confirmed_video_plate_ocr/
+data/confirmed_video_plate_ocr_v2/
+data/confirmed_video_plates.txt
+data/plate_debug/
+data/plate_debug_report_strong_candidate/
+data/plate_debug_report_updated/
+data/plate_video_frames/
+data/plate_video_report/
+data/plate_video_report_candidate/
+data/plate_video_report_strong_candidate/

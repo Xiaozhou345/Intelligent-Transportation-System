@@ -85,6 +85,7 @@ class PlateRecognitionProcessor:
     def _resolve_lprnet_model_path(self):
         repo_root = os.path.abspath(os.path.join(current_dir, '..', '..'))
         candidates = [
+            os.path.join(ai_models_dir, 'plate_recognition', 'sandbox_lprnet_best.pth'),
             os.path.join(ai_models_dir, 'plate_recognition', 'Final_LPRNet_model.pth'),
             os.path.join(repo_root, 'models', 'lprnet_best.pth'),
             os.path.join(repo_root, 'ui', 'models', 'pretrained_lprnet.pth'),

@@ -3,6 +3,7 @@
 使用YOLOv11进行车牌区域检测
 """
 from ultralytics import YOLO
+import os
 
 
 class PlateDetector:
@@ -25,8 +26,19 @@ class PlateDetector:
         # 自动选择GPU或CPU
         import torch
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.imgsz = int(os.getenv('ITS_PLATE_IMGSZ', '640'))
+        self.use_half = (
+            self.device == 'cuda'
+            and os.getenv('ITS_ENABLE_FP16', 'true').lower() == 'true'
+        )
+        if self.device == 'cuda':
+            torch.backends.cudnn.benchmark = True
         self.model.to(self.device)
-        print(f"车牌检测器初始化完成 (设备: {self.device}, conf: {self.conf_threshold})")
+        print(
+            f"车牌检测器初始化完成 "
+            f"(设备: {self.device}, imgsz: {self.imgsz}, FP16: {self.use_half}, "
+            f"conf: {self.conf_threshold})"
+        )
 
     def detect(self, frame):
         """
@@ -44,7 +56,14 @@ class PlateDetector:
                     'confidence': float
                 }
         """
-        results = self.model.predict(source=frame, conf=self.conf_threshold, verbose=False)
+        results = self.model.predict(
+            source=frame,
+            conf=self.conf_threshold,
+            imgsz=self.imgsz,
+            device=self.device,
+            half=self.use_half,
+            verbose=False,
+        )
 
         detections = []
         for box in results[0].boxes:

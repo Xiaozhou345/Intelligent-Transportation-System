@@ -231,14 +231,14 @@ cd ~/frp_0.69.1_linux_amd64
 本地电脑不再启动 MediaMTX，只保留业务服务：
 
 ```text
-后端 API / Socket.IO: 127.0.0.1:5000
+后端 API / Socket.IO: 127.0.0.1:5001
 前端开发服务: 127.0.0.1:5173
 ```
 
 启动后可以用下面命令检查端口：
 
 ```powershell
-Get-NetTCPConnection -LocalPort 5000,5173
+Get-NetTCPConnection -LocalPort 5001,5173
 ```
 
 ### 3. 本地 AI 电脑启动 frpc
@@ -326,7 +326,7 @@ http://106.54.10.11:8888/live/mobile_001/index.m3u8
 rtsp://106.54.10.11:8554/live/mobile_001
 ```
 
-如果 API 能打开，说明 `5000` 转发正常。
+如果 API 能打开，说明 `5001` 转发正常。
 如果手机开始推流后前端 WebRTC 有画面，说明 `8889` 和 `8189/UDP` 链路正常。
 如果 WebRTC 不通但 HLS 地址能打开，前端会自动回退到 HLS，但延迟会更高。
 

@@ -122,6 +122,21 @@ class RoadAnomalyProcessorTest(unittest.TestCase):
         self.assertFalse(learned)
         self.assertEqual(0, detector.background_frames)
 
+    def test_background_progress_is_exposed_and_reset(self):
+        detector = AnomalyDetector(
+            warmup_frames=0,
+            min_area=300,
+            use_default_road_scope=False,
+        )
+        processor = RoadAnomalyProcessor(detector=detector)
+
+        self.assertEqual(0, processor.background_frames)
+        self.assertTrue(processor.update_background(self.background, road_mask=self.clean_road))
+        self.assertEqual(1, processor.background_frames)
+
+        processor.reset()
+        self.assertEqual(0, processor.background_frames)
+
 
 if __name__ == "__main__":
     unittest.main()

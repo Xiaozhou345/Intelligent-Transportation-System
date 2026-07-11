@@ -165,7 +165,7 @@ cd cloud/stream_receiver
 python3 main_server.py
 ```
 
-服务将在 `http://0.0.0.0:5000` 启动。
+服务将在 `http://0.0.0.0:5001` 启动。
 
 ### 测试API
 
@@ -181,8 +181,8 @@ python3 test_api.py
 ### 你需要提供给A的信息：
 
 1. **HTTP接口地址**：
-   - 设备注册：`POST http://你的电脑IP:5000/api/register_device`
-   - 例如：`POST http://192.168.1.100:5000/api/register_device`
+   - 设备注册：`POST http://你的电脑IP:5001/api/register_device`
+   - 例如：`POST http://192.168.1.100:5001/api/register_device`
 
 2. **RTMP推流地址**（明天搭建RTMP服务器后提供）：
    - 格式：`rtmp://你的电脑IP:1935/live/stream_001`
@@ -209,7 +209,7 @@ import requests
 
 # 1. 注册设备
 response = requests.post(
-    "http://192.168.1.100:5000/api/register_device",
+    "http://192.168.1.100:5001/api/register_device",
     json={
         "device_id": "mobile_001",
         "stream_url": "rtmp://192.168.1.100:1935/live/stream_001",
@@ -226,7 +226,7 @@ print(response.json())
 
 # 3. 定期心跳（可选）
 response = requests.post(
-    "http://192.168.1.100:5000/api/heartbeat",
+    "http://192.168.1.100:5001/api/heartbeat",
     json={"device_id": "mobile_001"}
 )
 print(response.json())
@@ -238,7 +238,7 @@ print(response.json())
 
 ```bash
 # 注册设备
-curl -X POST http://192.168.1.100:5000/api/register_device \
+curl -X POST http://192.168.1.100:5001/api/register_device \
   -H "Content-Type: application/json" \
   -d '{
     "device_id": "mobile_001",
@@ -249,7 +249,7 @@ curl -X POST http://192.168.1.100:5000/api/register_device \
   }'
 
 # 查看所有设备
-curl http://192.168.1.100:5000/api/devices
+curl http://192.168.1.100:5001/api/devices
 ```
 
 ---
