@@ -11,6 +11,7 @@ import os
 import py_compile
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -86,10 +87,40 @@ def test_main_server_health_and_upload() -> None:
     assert invalid_upload.status_code == 400
 
 
+def test_edge_api_token_header() -> None:
+    from edge_member_a.edge_client import post_json
+
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'{"status":"ok"}'
+
+    with patch('edge_member_a.edge_client.urlopen', return_value=FakeResponse()) as mocked:
+        result = post_json(
+            'http://127.0.0.1:5000',
+            '/api/heartbeat',
+            {'device_id': 'smoke_001'},
+            1,
+            api_token='smoke-secret',
+        )
+
+    assert result['http_status'] == 200
+    request = mocked.call_args.args[0]
+    assert request.headers['X-api-key'] == 'smoke-secret'
+
+
 def main() -> int:
     compile_key_files()
     test_anomaly_processor()
     test_main_server_health_and_upload()
+    test_edge_api_token_header()
     print("project smoke tests passed")
     return 0
 

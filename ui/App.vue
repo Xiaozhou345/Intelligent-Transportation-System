@@ -1,25 +1,27 @@
 <script setup>
-import { computed, ref, reactive, onMounted, onUnmounted, nextTick } from 'vue'
+import { computed, defineAsyncComponent, ref, reactive, onMounted, onUnmounted, nextTick } from 'vue'
 import { ElAlert, ElTabPane, ElTabs, ElTag } from 'element-plus'
 import websocketManager from './utils/websocketManager'
 import VideoPlayer from './components/VideoPlayer.vue'
-import CameraPublisher from './components/CameraPublisher.vue'
-import PlateResult from './components/PlateResult.vue'
-import TrafficHeatmap from './components/TrafficHeatmap.vue'
-import IllegalParkingAlarm from './components/IllegalParkingAlarm.vue'
-import RoadAnomalyAlarm from './components/RoadAnomalyAlarm.vue'
-import VehicleDetectionPanel from './components/VehicleDetectionPanel.vue'
-import SystemMonitor from './components/SystemMonitor.vue'
-import DeviceManager from './components/DeviceManager.vue'
-import ConfigPanel from './components/ConfigPanel.vue'
-import DashboardStats from './components/DashboardStats.vue'
-import CloudEdgeStatus from './components/CloudEdgeStatus.vue'
-import EventStream from './components/EventStream.vue'
-import HistoryQuery from './components/HistoryQuery.vue'
-import WhitelistManager from './components/WhitelistManager.vue'
-import UserSessionPanel from './components/UserSessionPanel.vue'
-import AlarmWorkbench from './components/AlarmWorkbench.vue'
-import DemoChecklist from './components/DemoChecklist.vue'
+
+// 非首屏面板按需加载，避免 ECharts/管理组件全部挤进首个 JS 包。
+const CameraPublisher = defineAsyncComponent(() => import('./components/CameraPublisher.vue'))
+const PlateResult = defineAsyncComponent(() => import('./components/PlateResult.vue'))
+const TrafficHeatmap = defineAsyncComponent(() => import('./components/TrafficHeatmap.vue'))
+const IllegalParkingAlarm = defineAsyncComponent(() => import('./components/IllegalParkingAlarm.vue'))
+const RoadAnomalyAlarm = defineAsyncComponent(() => import('./components/RoadAnomalyAlarm.vue'))
+const VehicleDetectionPanel = defineAsyncComponent(() => import('./components/VehicleDetectionPanel.vue'))
+const SystemMonitor = defineAsyncComponent(() => import('./components/SystemMonitor.vue'))
+const DeviceManager = defineAsyncComponent(() => import('./components/DeviceManager.vue'))
+const ConfigPanel = defineAsyncComponent(() => import('./components/ConfigPanel.vue'))
+const DashboardStats = defineAsyncComponent(() => import('./components/DashboardStats.vue'))
+const CloudEdgeStatus = defineAsyncComponent(() => import('./components/CloudEdgeStatus.vue'))
+const EventStream = defineAsyncComponent(() => import('./components/EventStream.vue'))
+const HistoryQuery = defineAsyncComponent(() => import('./components/HistoryQuery.vue'))
+const WhitelistManager = defineAsyncComponent(() => import('./components/WhitelistManager.vue'))
+const UserSessionPanel = defineAsyncComponent(() => import('./components/UserSessionPanel.vue'))
+const AlarmWorkbench = defineAsyncComponent(() => import('./components/AlarmWorkbench.vue'))
+const DemoChecklist = defineAsyncComponent(() => import('./components/DemoChecklist.vue'))
 
 const connectionStatus = ref('未连接')
 const reconnectCount = ref(0)

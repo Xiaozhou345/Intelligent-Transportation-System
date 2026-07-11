@@ -4,12 +4,17 @@
 
 本模块负责接收边端设备推送的视频流，并提供设备管理功能。
 
+> 当前唯一推荐的集成入口是 `main_server.py`。`api_server.py`、
+> `api_server_fixed.py`、`api_server_sandbox.py` 和 `api_server_with_ai.py` 仅保留作为早期实验参考，
+> 不应用于当前部署。
+
 ## 文件结构
 
 ```
 stream_receiver/
 ├── device_manager.py   # 设备管理器
-├── api_server.py       # HTTP API服务
+├── main_server.py      # HTTP + Socket.IO + AI 统一主服务
+├── video_processor.py  # 实时流处理和 AI 调度
 └── test_api.py         # API测试脚本
 ```
 
@@ -157,7 +162,7 @@ stream_receiver/
 
 ```bash
 cd cloud/stream_receiver
-python3 api_server.py
+python3 main_server.py
 ```
 
 服务将在 `http://0.0.0.0:5000` 启动。
@@ -249,9 +254,9 @@ curl http://192.168.1.100:5000/api/devices
 
 ---
 
-## 后续工作
+## 当前状态
 
-- [ ] 搭建RTMP服务器（nginx-rtmp或SRS）
-- [ ] 实现视频流接收和解帧
-- [ ] 将视频帧送入AI模型处理
-- [ ] 与前端WebSocket对接
+- [x] MediaMTX RTSP 拉流与断流重连
+- [x] 车辆、车牌、违停和道路异常分析
+- [x] Socket.IO 实时结果与前端画框
+- [x] 可选 API Token、CORS 白名单和上传限制
