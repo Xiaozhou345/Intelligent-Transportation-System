@@ -28,7 +28,8 @@ webrtcAddress: :8889
 webrtcAllowOrigins: ["*"]
 webrtcAdditionalHosts: [106.54.10.11]
 webrtcLocalUDPAddress: :8189
-webrtcLocalTCPAddress: ""
+# UDP 被校园网/企业网屏蔽时使用 TCP 候选，否则 WHEP/WHIP 会握手成功但无画面。
+webrtcLocalTCPAddress: :8189
 
 paths:
   all:

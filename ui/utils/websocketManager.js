@@ -151,9 +151,12 @@ class WebSocketManager {
 
     try {
       this.ws = io(this.url, {
-        transports: ['websocket'],
+        // 允许 polling 握手/降级，再自动升级到 WebSocket。
+        // 部分 FRP/Nginx 未正确转发 Upgrade 头时，强制 websocket 会完全无法连接。
+        transports: ['polling', 'websocket'],
+        upgrade: true,
         reconnection: false,
-        timeout: 5000
+        timeout: 10000
       })
       this.status = 'connecting'
       this._notifyStatusChange()

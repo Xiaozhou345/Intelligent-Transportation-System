@@ -11,6 +11,7 @@
 import cv2
 import threading
 import time
+from queue import Empty, Full, Queue
 from datetime import datetime
 from pathlib import Path
 import json
@@ -481,6 +482,9 @@ class VideoProcessor:
         return max(candidate_scores.items(), key=lambda item: item[1])[0]
 
     def _process_stream(self, device_id, stream_url, stop_event):
+        if not os.path.exists(stream_url):
+            return self._process_live_stream(device_id, stream_url, stop_event)
+
         cap = None
         frame_count = 0
         is_local_file = os.path.exists(stream_url)
@@ -613,6 +617,124 @@ class VideoProcessor:
             if cap:
                 cap.release()
             print(f"视频流处理结束: {device_id}")
+
+    def _open_live_capture(self, stream_url):
+        """以低延迟、有超时的方式打开实时流。"""
+        params = []
+        for prop, env_name, default in (
+            (getattr(cv2, "CAP_PROP_OPEN_TIMEOUT_MSEC", None), "ITS_STREAM_OPEN_TIMEOUT_MS", 5000),
+            (getattr(cv2, "CAP_PROP_READ_TIMEOUT_MSEC", None), "ITS_STREAM_READ_TIMEOUT_MS", 5000),
+        ):
+            if prop is not None:
+                params.extend([prop, int(os.getenv(env_name, str(default)))])
+
+        try:
+            cap = cv2.VideoCapture(stream_url, cv2.CAP_FFMPEG, params)
+        except (TypeError, cv2.error):
+            cap = cv2.VideoCapture(stream_url)
+
+        # 部分 OpenCV/FFmpeg 构建识别 API 但不接受超时参数，用普通方式再试一次。
+        if not cap.isOpened() and params:
+            cap.release()
+            cap = cv2.VideoCapture(stream_url)
+
+        if cap.isOpened():
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        return cap
+
+    def _process_live_stream(self, device_id, stream_url, stop_event):
+        """
+        拉流与 AI 推理解耦。采集线程始终覆盖一格队列中的旧帧，
+        推理慢时丢弃过期帧，不会累积成数秒延迟。读取连续失败时重建连接。
+        """
+        latest_frame = Queue(maxsize=1)
+        failures_before_reconnect = max(1, int(os.getenv("ITS_STREAM_READ_FAILURES", "5")))
+        reconnect_delay = max(0.2, float(os.getenv("ITS_STREAM_RECONNECT_DELAY", "1")))
+
+        def publish_latest(item):
+            try:
+                latest_frame.put_nowait(item)
+            except Full:
+                try:
+                    latest_frame.get_nowait()
+                except Empty:
+                    pass
+                try:
+                    latest_frame.put_nowait(item)
+                except Full:
+                    pass
+
+        def capture_loop():
+            sequence = 0
+            attempt = 0
+            while not stop_event.is_set():
+                cap = self._open_live_capture(stream_url)
+                if not cap.isOpened():
+                    cap.release()
+                    attempt += 1
+                    if attempt == 1 or attempt % 5 == 0:
+                        print(f"视频流尚未可读: {stream_url} (第 {attempt} 次重连)")
+                    stop_event.wait(reconnect_delay)
+                    continue
+
+                if attempt:
+                    print(f"视频流已重连: {device_id}")
+                else:
+                    print(f"成功连接视频流: {device_id}")
+                attempt = 0
+                read_failures = 0
+
+                while not stop_event.is_set():
+                    ok, frame = cap.read()
+                    if not ok or frame is None or frame.size == 0:
+                        read_failures += 1
+                        if read_failures >= failures_before_reconnect:
+                            print(f"视频流 {device_id} 连续读取失败，正在重连")
+                            break
+                        stop_event.wait(0.05)
+                        continue
+
+                    read_failures = 0
+                    sequence += 1
+                    publish_latest((sequence, frame, time.monotonic()))
+
+                cap.release()
+                if not stop_event.is_set():
+                    stop_event.wait(reconnect_delay)
+
+
+        reader = threading.Thread(
+            target=capture_loop,
+            name=f"video-capture-{device_id}",
+            daemon=True,
+        )
+        reader.start()
+
+        last_sequence = 0
+        analyzed_count = 0
+        try:
+            while not stop_event.is_set():
+                try:
+                    sequence, frame, captured_at = latest_frame.get(timeout=1.0)
+                except Empty:
+                    continue
+                if sequence <= last_sequence:
+                    continue
+                last_sequence = sequence
+                if sequence % max(1, self.frame_skip) != 0:
+                    continue
+
+                analyzed_count += 1
+                state = self._get_or_create_runtime_state(device_id, frame.shape)
+                state["capture_to_analysis_ms"] = round((time.monotonic() - captured_at) * 1000, 1)
+                self._analyze_frame(device_id, frame, sequence)
+        except Exception as exc:
+            print(f"视频流处理异常 {device_id}: {exc}")
+            self._send_error(device_id, str(exc))
+        finally:
+            stop_event.set()
+            reader.join(timeout=6)
+            print(f"视频流处理结束: {device_id}，已分析 {analyzed_count} 帧")
 
     def _analyze_frame(self, device_id, frame, frame_count):
         # 防御性检查：确保frame有效（虽然上层已检查ret，但额外保护避免异常）

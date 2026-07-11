@@ -46,6 +46,9 @@ let whepResourceUrl = ''
 let webrtcFallbackTimer = null
 let webrtcFrameTimer = null
 let receivedVideoFrame = false
+let playbackWatchdog = null
+let lastPlaybackTime = -1
+let stalledChecks = 0
 
 const calculateVideoViewport = () => {
   const video = videoRef.value
@@ -155,16 +158,26 @@ const loadHlsSource = () => {
   video.srcObject = null
   playbackProtocol.value = 'HLS'
 
-  if (props.videoSrc.endsWith('.m3u8')) {
+  const isHlsSource = (() => {
+    try {
+      return new URL(props.videoSrc, window.location.href).pathname.endsWith('.m3u8')
+    } catch (_) {
+      return props.videoSrc.includes('.m3u8')
+    }
+  })()
+
+  if (isHlsSource) {
     if (Hls.isSupported()) {
       hls = new Hls({
         lowLatencyMode: true,
         liveSyncDurationCount: 1,
         liveMaxLatencyDurationCount: 3,
         maxLiveSyncPlaybackRate: 1.5,
-        maxBufferLength: 5,
-        maxMaxBufferLength: 8,
-        backBufferLength: 10,
+        maxBufferLength: 3,
+        maxMaxBufferLength: 5,
+        backBufferLength: 3,
+        liveDurationInfinity: true,
+        highBufferWatchdogPeriod: 1,
         enableWorker: true
       })
       hls.loadSource(props.videoSrc)
@@ -180,6 +193,14 @@ const loadHlsSource = () => {
       })
       hls.on(Hls.Events.ERROR, (_, data) => {
         console.error('HLS 播放错误:', data)
+        if (!data.fatal) return
+        if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+          window.setTimeout(() => hls?.startLoad(-1), 800)
+        } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+          hls.recoverMediaError()
+        } else {
+          window.setTimeout(loadVideoSource, 1200)
+        }
       })
       return
     }
@@ -444,12 +465,36 @@ const handleResize = () => {
   updateCanvasSize()
 }
 
+const startPlaybackWatchdog = () => {
+  if (playbackWatchdog) window.clearInterval(playbackWatchdog)
+  lastPlaybackTime = -1
+  stalledChecks = 0
+  playbackWatchdog = window.setInterval(() => {
+    const video = videoRef.value
+    if (!video || video.paused || video.ended || document.hidden) return
+
+    if (video.readyState >= 2 && Math.abs(video.currentTime - lastPlaybackTime) > 0.01) {
+      lastPlaybackTime = video.currentTime
+      stalledChecks = 0
+      return
+    }
+
+    stalledChecks += 1
+    if (stalledChecks < 3) return
+    stalledChecks = 0
+    console.warn('视频连续卡顿，正在重建播放连接')
+    loadVideoSource()
+  }, 3000)
+}
+
 onMounted(() => {
   loadVideoSource()
+  startPlaybackWatchdog()
   window.addEventListener('resize', handleResize)
 })
 
 onUnmounted(() => {
+  if (playbackWatchdog) window.clearInterval(playbackWatchdog)
   destroyHls()
   destroyWebrtc()
   window.removeEventListener('resize', handleResize)
