@@ -619,7 +619,7 @@ const showAnnotatedFrame = (imageUrl, sequence) => {
 
       // 使用 imageSmoothingEnabled 控制缩放质量
       ctx.imageSmoothingEnabled = true
-      ctx.imageSmoothingQuality = 'low'  // 'low' 最快，'high' 最慢
+      ctx.imageSmoothingQuality = 'high'  // 'high' 高画质，'medium' 中等，'low' 最快
 
       ctx.drawImage(img, x, y, scaledWidth, scaledHeight)
 

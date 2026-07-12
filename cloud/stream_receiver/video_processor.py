@@ -1442,9 +1442,10 @@ class VideoProcessor:
             )
             perf_timings['draw_boxes'] = (time.time() - draw_start) * 1000
 
-            # 步骤9.2：编码为JPEG（质量65，优先降低延迟）
+            # 步骤9.2：编码为JPEG（质量85，平衡画质与性能）
+            # 质量说明：65=偏低画质，85=高画质，95=极高画质（文件更大）
             encode_start = time.time()
-            encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 65]
+            encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 85]
             _, buffer = cv2.imencode('.jpg', annotated_frame, encode_param)
             perf_timings['jpeg_encode'] = (time.time() - encode_start) * 1000
 
