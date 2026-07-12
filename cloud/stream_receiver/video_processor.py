@@ -1480,17 +1480,28 @@ class VideoProcessor:
                 },
             })
 
-            # 🔥 优化：不再推送 video_overlay，因为：
-            # 1. video_frame 已经包含完整画面（视频+检测框）
-            # 2. 统计数据可以从独立事件获取（vehicle_detection, plate_recognition 等）
-            # 3. 减少网络传输量约 70%
-            # 4. 简化前端逻辑，避免渲染冲突
-            #
-            # 旧代码（已删除）：
-            # self._send_result({
-            #     'event_type': 'video_overlay',
-            #     'data': {'vehicle_count': ..., 'plate_count': ...}
-            # })
+            # 🔥 优化：同时发送 overlay 元数据（用于统计面板），但不重复推送完整 overlay
+            # 这样前端可以获取统计数据，但不会重复绘制检测框
+            self._send_result({
+                'event_type': 'video_overlay',
+                'timestamp': timestamp,
+                'device_id': device_id,
+                'status': 'normal',
+                'sequence': int(frame_count),
+                'analysis_latency_ms': overlay['analysis_latency_ms'],
+                'stream_size': overlay['stream_size'],
+                'active_scene': active_scene,
+                'data': {
+                    # 只传递统计数据，不传递具体坐标（前端不需要绘制）
+                    'vehicle_count': len(overlay['data']['vehicles']),
+                    'plate_count': len(overlay['data']['plates']),
+                    'illegal_parking_count': len(overlay['data']['illegal_parking']),
+                    'parking_status_count': len(overlay['data']['parking_statuses']),
+                    'road_anomaly_count': len(overlay['data']['road_anomalies']),
+                    'no_parking_zone_count': len(overlay['data']['no_parking_zones']),
+                    'traffic_region_count': len(overlay['data']['traffic_regions']),
+                }
+            })
 
             perf_timings['websocket_send'] = (time.time() - push_start) * 1000
 

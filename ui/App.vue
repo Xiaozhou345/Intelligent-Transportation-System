@@ -273,9 +273,9 @@ const updateLatency = (timestamp) => {
 
 const handleSceneChange = (scene) => {
   activeScene.value = scene
-  // 🔥 修复：删除 redrawCurrentOverlay 调用
-  // video_frame 已经包含完整画面（视频+检测框），切换场景时不需要重绘
-  // 旧代码会因为 video_overlay 数据不完整而导致检测框消失
+  nextTick(() => {
+    redrawCurrentOverlay()
+  })
   handleSendCommand({
     command: 'switch_scene',
     scene_id: scene
@@ -364,9 +364,14 @@ const handleVideoOverlay = (data, skipDraw = false) => {
     latestLatency.value = Math.max(0, Math.round(analysisLatency))
   }
 
-  // 🔥 优化：video_overlay 现在只包含统计数据，不再用于绘制
-  // video_frame 已经包含完整画面，无需在此绘制
-  // 保留此函数只是为了更新延迟信息和统计数据
+  // 🔥 关键修复：如果 skipDraw=true，只更新数据，不绘制
+  // 因为 video_frame 已经包含了完整画面
+  if (skipDraw || !videoPlayerRef.value) return
+
+  const sourceSize = data.stream_size?.width && data.stream_size?.height
+    ? { width: data.stream_size.width, height: data.stream_size.height }
+    : null
+  videoPlayerRef.value.drawBoxes(buildOverlayBoxes(data), sourceSize)
 }
 
 // 新增：处理后端绘制好的视频帧
@@ -409,17 +414,14 @@ const handleVideoFrame = (data) => {
   }
 }
 
-// 🔥 废弃函数：redrawCurrentOverlay 已失效，注释保留供参考
-// 原因：video_overlay 不再包含完整的 bbox 数据，buildOverlayBoxes 会返回空数组
-// video_frame 已经包含完整画面，切换场景时不需要重绘
-// const redrawCurrentOverlay = () => {
-//   if (!videoPlayerRef.value || !latestVideoOverlay.value) return
-//   const overlay = latestVideoOverlay.value
-//   const sourceSize = overlay.stream_size?.width && overlay.stream_size?.height
-//     ? { width: overlay.stream_size.width, height: overlay.stream_size.height }
-//     : null
-//   videoPlayerRef.value.drawBoxes(buildOverlayBoxes(overlay), sourceSize)
-// }
+const redrawCurrentOverlay = () => {
+  if (!videoPlayerRef.value || !latestVideoOverlay.value) return
+  const overlay = latestVideoOverlay.value
+  const sourceSize = overlay.stream_size?.width && overlay.stream_size?.height
+    ? { width: overlay.stream_size.width, height: overlay.stream_size.height }
+    : null
+  videoPlayerRef.value.drawBoxes(buildOverlayBoxes(overlay), sourceSize)
+}
 
 const handleVehicleDetection = (data) => {
   vehicleDetectionRecords.value.unshift(data)
@@ -572,10 +574,12 @@ const routeEvent = (data) => {
 
   if (data.event_type === 'video_frame') {
     handleVideoFrame(data)
+    // 🔥 关键修复：收到 video_frame 时，标记为"后端渲染模式"
+    // video_frame 已经包含了完整画面（视频+检测框），不需要再处理 video_overlay
   } else if (data.event_type === 'video_overlay') {
-    // 🔥 优化：video_overlay 只包含统计数据，不再用于绘制
-    // 只更新延迟信息和保存数据，video_frame 已经包含完整画面
-    handleVideoOverlay(data)
+    // 🔥 关键修复：如果正在使用后端渲染模式，跳过 overlay 绘制
+    // 只保存数据用于统计面板，不在 canvas 上绘制
+    handleVideoOverlay(data, true)  // 传入 skipDraw=true
   } else if (data.event_type === 'vehicle_detection') {
     handleVehicleDetection(data)
   } else if (data.event_type === 'plate_recognition') {
