@@ -617,14 +617,28 @@ const loadHistoryData = async () => {
       const eventsData = await eventsRes.json()
       if (eventsData.status === 'success' && eventsData.data.length > 0) {
         // 转换数据格式以匹配前端
-        const historyEvents = eventsData.data.map(event => ({
-          event_type: event.event_type,
-          device_id: event.device_id,
-          timestamp: event.created_at,
-          status: 'normal',
-          data: event.result_json || {},
-          plate_number: event.plate_number
-        }))
+        const historyEvents = eventsData.data.map(event => {
+          // 解析 result_json 字符串为对象
+          let parsedData = {}
+          if (typeof event.result_json === 'string') {
+            try {
+              parsedData = JSON.parse(event.result_json)
+            } catch (e) {
+              console.warn('解析 result_json 失败:', e)
+            }
+          } else if (event.result_json) {
+            parsedData = event.result_json
+          }
+
+          return {
+            event_type: event.event_type,
+            device_id: event.device_id,
+            timestamp: event.created_at,
+            status: 'normal',
+            data: parsedData,
+            plate_number: event.plate_number
+          }
+        })
 
         // 将历史数据添加到事件记录
         eventRecords.value = [...historyEvents, ...eventRecords.value]
