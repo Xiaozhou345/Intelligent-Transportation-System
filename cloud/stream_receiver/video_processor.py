@@ -1072,6 +1072,16 @@ class VideoProcessor:
             active_scene == 'plate_recognition'
             or (active_scene == 'vehicle_detection' and self.plate_in_vehicle_scene)
         )
+
+        # 调试日志：记录车牌检测条件
+        if frame_count % 30 == 0:  # 每30帧打印一次
+            print(f"🔍 车牌检测条件检查:")
+            print(f"   active_scene: {active_scene}")
+            print(f"   plate_scene_enabled: {plate_scene_enabled}")
+            print(f"   self.plate_detector: {self.plate_detector is not None}")
+            print(f"   processed_frames: {state['processed_frames']}")
+            print(f"   skip_check: {state['processed_frames'] % self.plate_recognition_skip == 0}")
+
         if (
             plate_scene_enabled
             and self.plate_detector
