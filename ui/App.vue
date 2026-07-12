@@ -357,17 +357,61 @@ const buildOverlayBoxes = (overlay) => {
   ]
 }
 
-const handleVideoOverlay = (data) => {
+const handleVideoOverlay = (data, skipDraw = false) => {
   latestVideoOverlay.value = data
   const analysisLatency = Number(data.analysis_latency_ms)
   if (Number.isFinite(analysisLatency)) {
     latestLatency.value = Math.max(0, Math.round(analysisLatency))
   }
-  if (!videoPlayerRef.value) return
+
+  // 🔥 关键修复：如果 skipDraw=true，只更新数据，不绘制
+  // 因为 video_frame 已经包含了完整画面
+  if (skipDraw || !videoPlayerRef.value) return
+
   const sourceSize = data.stream_size?.width && data.stream_size?.height
     ? { width: data.stream_size.width, height: data.stream_size.height }
     : null
   videoPlayerRef.value.drawBoxes(buildOverlayBoxes(data), sourceSize)
+}
+
+// 新增：处理后端绘制好的视频帧
+let lastFrameSequence = 0
+const handleVideoFrame = (data) => {
+  const analysisLatency = Number(data.analysis_latency_ms)
+  if (Number.isFinite(analysisLatency)) {
+    latestLatency.value = Math.max(0, Math.round(analysisLatency))
+  }
+  if (!videoPlayerRef.value) return
+
+  // 帧丢弃：如果前端渲染慢于后端推送，丢弃旧帧
+  const sequence = data.sequence || 0
+  if (sequence <= lastFrameSequence) {
+    return  // 旧帧，直接丢弃
+  }
+  lastFrameSequence = sequence
+
+  // 解码图像数据
+  const imageData = data.data?.image
+  if (!imageData || typeof imageData !== 'string') {
+    console.warn('无效的图像数据', imageData)
+    return
+  }
+
+  // 高性能 base64 解码：使用 Blob 构造函数直接处理
+  try {
+    // 方法1：使用 fetch data URI (Chrome 优化，最快)
+    fetch(`data:image/jpeg;base64,${imageData}`)
+      .then(res => res.blob())
+      .then(blob => {
+        const url = URL.createObjectURL(blob)
+        videoPlayerRef.value.showAnnotatedFrame(url, sequence)
+      })
+      .catch(error => {
+        console.error('解码图像失败:', error)
+      })
+  } catch (error) {
+    console.error('解码图像失败:', error)
+  }
 }
 
 const redrawCurrentOverlay = () => {
@@ -528,8 +572,14 @@ const routeEvent = (data) => {
   updateLatency(data.timestamp)
   addEventRecord(data)
 
-  if (data.event_type === 'video_overlay') {
-    handleVideoOverlay(data)
+  if (data.event_type === 'video_frame') {
+    handleVideoFrame(data)
+    // 🔥 关键修复：收到 video_frame 时，标记为"后端渲染模式"
+    // video_frame 已经包含了完整画面（视频+检测框），不需要再处理 video_overlay
+  } else if (data.event_type === 'video_overlay') {
+    // 🔥 关键修复：如果正在使用后端渲染模式，跳过 overlay 绘制
+    // 只保存数据用于统计面板，不在 canvas 上绘制
+    handleVideoOverlay(data, true)  // 传入 skipDraw=true
   } else if (data.event_type === 'vehicle_detection') {
     handleVehicleDetection(data)
   } else if (data.event_type === 'plate_recognition') {

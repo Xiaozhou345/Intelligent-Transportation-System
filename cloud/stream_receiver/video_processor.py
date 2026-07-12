@@ -129,6 +129,11 @@ class VideoProcessor:
         self.sent_plates: Dict[str, Dict[str, float]] = {}
         self.plate_cooldown = float(os.getenv("ITS_PLATE_COOLDOWN", "30.0"))  # 默认30秒冷却时间
 
+        # 车辆检测事件去重缓存：{device_id: {track_id: last_sent_timestamp}}
+        # 用于防止同一辆车短时间内重复推送到前端（与车牌去重逻辑一致）
+        self.sent_vehicles: Dict[str, Dict[int, float]] = {}
+        self.vehicle_cooldown = float(os.getenv("ITS_VEHICLE_COOLDOWN", "30.0"))  # 默认30秒冷却时间
+
         self.runtime_defaults = self._load_runtime_defaults()
         self.runtime_state: Dict[str, dict] = {}
 
@@ -347,11 +352,58 @@ class VideoProcessor:
             self.runtime_state[device_id] = state
 
         if frame_shape is not None and state["frame_shape"] != frame_shape:
+            # 检测到分辨率变化，可能是视频源切换
+            old_shape = state["frame_shape"]
+            is_stream_switch = old_shape is not None  # 不是首次初始化
+
             state["frame_shape"] = frame_shape
             state["traffic_regions"] = self._scale_regions(self.runtime_defaults.get("traffic_regions", []), frame_shape)
             state["no_parking_zones"] = self._scale_regions(self.runtime_defaults.get("no_parking_zones", []), frame_shape)
             state["anomaly_road_roi"] = self._scale_polygon(self.runtime_defaults.get("anomaly_road_roi", []), frame_shape)
+
+            # 🔄 视频源切换：重置所有跟踪状态
+            if is_stream_switch:
+                print(f"🔄 检测到视频分辨率变化 {old_shape} → {frame_shape}，重置跟踪状态")
+
+                # 1. 重置ByteTrack跟踪器
+                state["tracker"].reset()
+
+                # 2. 重置违停监控状态
+                state["parking_monitor"].track_states.clear()
+                state["parking_monitor"].recent_alerts.clear()
+                if hasattr(state["parking_monitor"], '_debug_logged'):
+                    delattr(state["parking_monitor"], '_debug_logged')
+                if hasattr(state["parking_monitor"], '_no_zone_logged_count'):
+                    delattr(state["parking_monitor"], '_no_zone_logged_count')
+
+                # 3. 清空车牌去重缓存
+                if device_id in self.sent_plates:
+                    self.sent_plates[device_id].clear()
+
+                # 4. 清空车辆去重缓存
+                if device_id in self.sent_vehicles:
+                    self.sent_vehicles[device_id].clear()
+
+                # 5. 重置帧计数
+                state["processed_frames"] = 0
+
+                print(f"   ✅ 已清空跟踪器、违停监控、车牌/车辆去重缓存")
+
+            # 更新违停监控的禁停区配置
             state["parking_monitor"].zones = state["no_parking_zones"]
+
+            # 输出调试信息：禁停区配置
+            print(f"🚨 违停监控配置更新 (分辨率: {frame_shape[1]}x{frame_shape[0]}):")
+            print(f"   - 配置了 {len(state['no_parking_zones'])} 个禁停区")
+            for zone in state["no_parking_zones"]:
+                zone_name = zone.get('name', zone.get('zone_id'))
+                polygon = zone.get('polygon', [])
+                threshold = zone.get('threshold_seconds', 30)
+                if polygon:
+                    xs = [p[0] for p in polygon]
+                    ys = [p[1] for p in polygon]
+                    print(f"   - {zone_name}: 阈值={threshold}s, 范围=X[{min(xs)}-{max(xs)}] Y[{min(ys)}-{max(ys)}]")
+
             if self.anomaly_processor:
                 self.anomaly_processor.detector.road_roi = state["anomaly_road_roi"] or None
         return state
@@ -814,6 +866,8 @@ class VideoProcessor:
                             if not first_frame.is_set():
                                 if connected_once:
                                     print(f"视频流已重连: {device_id}")
+                                    # 标记流重连，下一帧处理时将重置跟踪状态
+                                    state["stream_reconnected"] = True
                                 else:
                                     print(f"成功连接视频流: {device_id}")
                                 connected_once = True
@@ -930,6 +984,40 @@ class VideoProcessor:
         if frame is None or frame.size == 0:
             print(f"⚠️  帧 {frame_count} 无效（frame为空或size=0），跳过分析")
             return
+
+        # 🔄 检测并处理流重连（即使分辨率相同也要重置跟踪）
+        state = self.runtime_state.get(device_id)
+        if state and state.get("stream_reconnected"):
+            print(f"🔄 处理流重连事件 {device_id}，重置跟踪状态")
+
+            # 1. 重置ByteTrack跟踪器
+            state["tracker"].reset()
+
+            # 2. 重置违停监控状态
+            state["parking_monitor"].track_states.clear()
+            state["parking_monitor"].recent_alerts.clear()
+            if hasattr(state["parking_monitor"], '_debug_logged'):
+                delattr(state["parking_monitor"], '_debug_logged')
+            if hasattr(state["parking_monitor"], '_no_zone_logged_count'):
+                delattr(state["parking_monitor"], '_no_zone_logged_count')
+            if hasattr(state["parking_monitor"], '_update_call_count'):
+                delattr(state["parking_monitor"], '_update_call_count')
+
+            # 3. 清空车牌去重缓存
+            if device_id in self.sent_plates:
+                self.sent_plates[device_id].clear()
+
+            # 4. 清空车辆去重缓存
+            if device_id in self.sent_vehicles:
+                self.sent_vehicles[device_id].clear()
+
+            # 5. 重置帧计数
+            state["processed_frames"] = 0
+
+            # 6. 清除重连标记
+            state["stream_reconnected"] = False
+
+            print(f"   ✅ 已清空跟踪器、违停监控、车牌/车辆去重缓存")
 
         # ============ 性能监控：记录总耗时 ============
         frame_start_time = time.time()
@@ -1137,15 +1225,35 @@ class VideoProcessor:
                 if best_match_idx >= 0:
                     vehicle_plate_map[best_match_idx] = plate_event["data"]["plate_number"]
 
-            # 使用tracked_vehicles而不是vehicles，确保包含track_id
+            # 初始化设备的车辆去重缓存
+            if device_id not in self.sent_vehicles:
+                self.sent_vehicles[device_id] = {}
+
+            current_time = time.time()
+
+            # 使用tracked_vehicles而不是vehicles，确保包含track_id，并应用去重逻辑
             for idx, tracked in enumerate(tracked_vehicles):
+                track_id = tracked.get("track_id")
+                if track_id is None:
+                    # 没有track_id的车辆跳过（不应该发生，但防御性编程）
+                    continue
+
+                # 检查是否在冷却期内（与车牌去重逻辑一致）
+                last_sent_time = self.sent_vehicles[device_id].get(track_id, 0)
+                if current_time - last_sent_time < self.vehicle_cooldown:
+                    # 在冷却期内，跳过该车辆
+                    continue
+
+                # 更新最后发送时间
+                self.sent_vehicles[device_id][track_id] = current_time
+
                 plate_number = vehicle_plate_map.get(idx, "")
                 self._send_result({
                     "event_type": "vehicle_detection",
                     "timestamp": timestamp,
                     "device_id": device_id,
                     "data": {
-                        "vehicle_id": tracked.get("track_id", idx + 1),  # 使用跟踪ID，确保跨帧一致性
+                        "vehicle_id": track_id,  # 使用跟踪ID，确保跨帧一致性
                         "vehicle_type": tracked["class_name"],
                         "confidence": tracked["confidence"],
                         "plate_number": plate_number,  # 关联的车牌号
@@ -1153,6 +1261,14 @@ class VideoProcessor:
                     "bbox": tracked["bbox"],
                     "status": "detected",
                 })
+
+            # 清理过期的车辆记录（超过冷却时间的2倍）
+            expired_track_ids = [
+                track_id for track_id, last_time in self.sent_vehicles[device_id].items()
+                if current_time - last_time > self.vehicle_cooldown * 2
+            ]
+            for track_id in expired_track_ids:
+                del self.sent_vehicles[device_id][track_id]
 
         # ============ 步骤5：热力图计算 ============
         step_start = time.time()
@@ -1165,14 +1281,28 @@ class VideoProcessor:
 
         # ============ 步骤6：违停监控 ============
         step_start = time.time()
+        # 违停监控始终运行（维护状态），但只在 illegal_parking 场景下推送事件
+
+        # 增强调试：每帧都输出场景和车辆数（仅在 illegal_parking 场景下）
+        if active_scene == 'illegal_parking':
+            yolo_count = len(vehicles) if 'vehicles' in locals() else 0
+            tracked_count = len(tracked_vehicles)
+            print(f"🚨 [Frame {state['processed_frames']}] 违停场景 - YOLO检测: {yolo_count}辆, ByteTrack跟踪: {tracked_count}辆")
+
         parking_events = state["parking_monitor"].update(device_id, tracked_vehicles, timestamp)
         parking_statuses = state["parking_monitor"].get_active_statuses(timestamp)
+
+        # 输出违停监控调试信息
+        if active_scene == 'illegal_parking' and state["processed_frames"] % 30 == 0:
+            active_tracks = len([s for s in parking_statuses if s.get('status') in ['monitoring', 'warning']])
+            print(f"🚨 违停监控状态: {active_tracks} 辆车在禁停区, 共 {len(tracked_vehicles)} 辆车被跟踪")
+
         if active_scene == 'illegal_parking':
             for event in parking_events:
                 self._send_result(event)
                 print(
-                    f"违停告警: track_id={event['data'].get('track_id')} "
-                    f"stay_time={event['data'].get('stay_time')}s bbox={event.get('bbox')}"
+                    f"🚨🚨🚨 违停告警触发: track_id={event['data'].get('track_id')} "
+                    f"stay_time={event['data'].get('stay_time')}s zone={event['data'].get('zone_name')} bbox={event.get('bbox')}"
                 )
         perf_timings['illegal_parking'] = (time.time() - step_start) * 1000
 
@@ -1298,13 +1428,82 @@ class VideoProcessor:
         )
         overlay['sequence'] = int(frame_count)
 
-        # ============ 步骤9：推送overlay ============
+        # ============ 步骤9：在帧上绘制检测框并推送 ============
         step_start = time.time()
-        # 性能优化：降低video_overlay推送频率，避免WebSocket拥塞
-        # 默认每2个处理帧推送一次（而不是每个处理帧都推送）
-        # 这样可以减少网络传输压力，降低前端渲染压力
+        # 新方案：后端直接在视频帧上绘制检测框，然后推送完整画面给前端
+        # 这样可以保证视频内容和检测框完全同步，避免WebRTC视频流和WebSocket overlay的时间差
         if state["processed_frames"] % self.overlay_push_skip == 0:
-            self._send_result(overlay)
+            # 步骤9.1：在帧上绘制检测框
+            draw_start = time.time()
+            annotated_frame = self._draw_overlay_on_frame(
+                frame=frame.copy(),  # 复制一份，避免修改原始帧
+                overlay=overlay,
+                active_scene=active_scene,
+            )
+            perf_timings['draw_boxes'] = (time.time() - draw_start) * 1000
+
+            # 步骤9.2：编码为JPEG（质量65，优先降低延迟）
+            encode_start = time.time()
+            encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 65]
+            _, buffer = cv2.imencode('.jpg', annotated_frame, encode_param)
+            perf_timings['jpeg_encode'] = (time.time() - encode_start) * 1000
+
+            # 步骤9.3：转换为base64编码（比hex更高效）
+            b64_start = time.time()
+            import base64
+            image_base64 = base64.b64encode(buffer.tobytes()).decode('utf-8')
+            perf_timings['base64_encode'] = (time.time() - b64_start) * 1000
+            perf_timings['frame_size_kb'] = len(image_base64) / 1024
+
+            # 步骤9.4：推送绘制好的帧（通过WebSocket发送图像数据）
+            push_start = time.time()
+            self._send_result({
+                'event_type': 'video_frame',
+                'timestamp': timestamp,
+                'device_id': device_id,
+                'status': 'normal',
+                'sequence': int(frame_count),
+                'analysis_latency_ms': round(
+                    float(state.get("capture_to_analysis_ms", 0))
+                    + (time.time() - frame_start_time) * 1000,
+                    1,
+                ),
+                'stream_size': {
+                    'width': int(frame.shape[1]),
+                    'height': int(frame.shape[0]),
+                },
+                'active_scene': active_scene,
+                'data': {
+                    'image': image_base64,  # base64编码的JPEG图像
+                    'encoding': 'jpeg',
+                },
+            })
+
+            # 🔥 优化：同时发送 overlay 元数据（用于统计面板），但不重复推送完整 overlay
+            # 这样前端可以获取统计数据，但不会重复绘制检测框
+            self._send_result({
+                'event_type': 'video_overlay',
+                'timestamp': timestamp,
+                'device_id': device_id,
+                'status': 'normal',
+                'sequence': int(frame_count),
+                'analysis_latency_ms': overlay['analysis_latency_ms'],
+                'stream_size': overlay['stream_size'],
+                'active_scene': active_scene,
+                'data': {
+                    # 只传递统计数据，不传递具体坐标（前端不需要绘制）
+                    'vehicle_count': len(overlay['data']['vehicles']),
+                    'plate_count': len(overlay['data']['plates']),
+                    'illegal_parking_count': len(overlay['data']['illegal_parking']),
+                    'parking_status_count': len(overlay['data']['parking_statuses']),
+                    'road_anomaly_count': len(overlay['data']['road_anomalies']),
+                    'no_parking_zone_count': len(overlay['data']['no_parking_zones']),
+                    'traffic_region_count': len(overlay['data']['traffic_regions']),
+                }
+            })
+
+            perf_timings['websocket_send'] = (time.time() - push_start) * 1000
+
             perf_timings['push_overlay'] = (time.time() - step_start) * 1000
         else:
             perf_timings['push_overlay'] = 0  # 跳过推送
@@ -1334,6 +1533,12 @@ class VideoProcessor:
             print(f"  8️⃣  道路异常检测:           {perf_timings.get('road_anomaly', 0):7.2f} ms")
             print(f"  9️⃣  构建overlay:            {perf_timings.get('build_overlay', 0):7.2f} ms")
             print(f"  🔟 推送overlay:            {perf_timings.get('push_overlay', 0):7.2f} ms")
+            if perf_timings.get('push_overlay', 0) > 0:
+                print(f"      ├─ 绘制检测框:         {perf_timings.get('draw_boxes', 0):7.2f} ms")
+                print(f"      ├─ JPEG编码:           {perf_timings.get('jpeg_encode', 0):7.2f} ms")
+                print(f"      ├─ Base64编码:         {perf_timings.get('base64_encode', 0):7.2f} ms")
+                print(f"      ├─ WebSocket推送:      {perf_timings.get('websocket_send', 0):7.2f} ms")
+                print(f"      └─ 帧大小:             {perf_timings.get('frame_size_kb', 0):7.2f} KB")
             print(f"\n  {'🎯 总耗时:':<25} {total_time:7.2f} ms")
             print(f"{'='*80}\n")
         elif state["processed_frames"] % self.frame_log_every == 0:
@@ -1369,15 +1574,57 @@ class VideoProcessor:
         # 获取当前帧（用于车道线检测）
         current_frame = state.get("current_frame")
         if current_frame is None or not hasattr(self, 'lane_detector') or self.lane_detector is None:
-            # 降级方案：车道检测器未初始化，返回空热力图
+            # 降级方案：车道检测器未初始化或当前帧为空，使用整个画面作为单一区域
+            # 统计所有车辆
+            total_count = len(tracked_vehicles)
+
+            # 如果没有车辆，返回空热力图
+            if total_count == 0:
+                return {
+                    "event_type": "traffic_density",
+                    "timestamp": timestamp,
+                    "device_id": device_id,
+                    "status": "normal",
+                    "data": {
+                        "regions": [],
+                        "lane_lines": [],
+                    },
+                }
+
+            # 判断整体拥堵等级
+            if total_count <= 2:
+                status = "smooth"
+                color = "green"
+            elif 3 <= total_count <= 5:
+                status = "slow"
+                color = "orange"
+            else:  # total_count > 5
+                status = "congested"
+                color = "red"
+
+            # 整个画面作为一个区域
+            polygon = [
+                [0, 0],          # 左上角
+                [width, 0],      # 右上角
+                [width, height], # 右下角
+                [0, height]      # 左下角
+            ]
+
             return {
                 "event_type": "traffic_density",
                 "timestamp": timestamp,
                 "device_id": device_id,
                 "status": "normal",
                 "data": {
-                    "regions": [],
-                    "lane_lines": [],
+                    "regions": [{
+                        "region_id": "lane_0",
+                        "name": "整体通畅",
+                        "vehicle_count": total_count,
+                        "status": status,
+                        "color": color,
+                        "polygon": polygon,
+                    }],
+                    "lane_lines": [],  # 无车道线
                 },
             }
 
@@ -1425,12 +1672,13 @@ class VideoProcessor:
         for lane_id, x_start, x_end in lanes:
             count = lane_counts.get(lane_id, 0)
 
-            # 如果车道无车辆，跳过（不推送空车道）
+            # 修复：显示所有车道，包括空车道（改善用户体验，让用户看到完整的车道划分）
+            # 判断拥堵等级
             if count == 0:
-                continue
-
-            # 判断拥堵等级（新阈值）
-            if count == 1:
+                # 空车道也显示，使用透明的绿色或不显示（取决于前端实现）
+                status = "smooth"
+                color = "green"
+            elif count == 1:
                 status = "smooth"
                 color = "green"
             elif 2 <= count <= 3:
@@ -1467,11 +1715,14 @@ class VideoProcessor:
             })
 
         if state["processed_frames"] % self.frame_log_every == 0:
-            summary = (
-                f"检测到{len(lanes)}个车道，{len(lane_lines)}条分隔线，"
-                f"共{sum(lane_counts.values())}辆车"
-            )
-            print(f"traffic_density (车道模式): {summary}")
+            if len(lane_lines) == 0:
+                summary = f"未检测到车道线，使用单一区域（共{sum(lane_counts.values())}辆车）"
+            else:
+                summary = (
+                    f"检测到{len(lanes)}个车道，{len(lane_lines)}条分隔线，"
+                    f"共{sum(lane_counts.values())}辆车 - 车道分布: {dict(lane_counts)}"
+                )
+            print(f"🚦 traffic_density (车道模式): {summary}")
 
         return {
             "event_type": "traffic_density",
@@ -1605,6 +1856,259 @@ class VideoProcessor:
         if device_id:
             return [self._get_or_create_runtime_state(device_id)]
         return list(self.runtime_state.values())
+
+    def _draw_overlay_on_frame(self, frame, overlay, active_scene):
+        """
+        在视频帧上直接绘制检测框和标签
+
+        Args:
+            frame: 原始帧（BGR格式）
+            overlay: overlay数据结构
+            active_scene: 当前场景
+
+        Returns:
+            绘制后的帧
+        """
+        # 定义颜色（BGR格式）
+        COLOR_VEHICLE = (0, 255, 0)      # 绿色 - 车辆
+        COLOR_PLATE = (255, 255, 0)      # 青色 - 车牌
+        COLOR_ILLEGAL = (0, 0, 255)      # 红色 - 违停
+        COLOR_PARKING = (0, 165, 255)    # 橙色 - 监控中
+        COLOR_ZONE = (0, 255, 255)       # 黄色 - 禁停区
+        COLOR_ANOMALY = (255, 0, 255)    # 紫色 - 道路异常
+        COLOR_REGION_GREEN = (0, 255, 0)    # 绿色 - 通畅
+        COLOR_REGION_ORANGE = (0, 165, 255) # 橙色 - 缓慢
+        COLOR_REGION_RED = (0, 0, 255)      # 红色 - 拥堵
+
+        # 1. 绘制交通密度区域（半透明多边形）
+        if active_scene == 'traffic_density':
+            overlay_img = frame.copy()
+            for region in overlay['data'].get('traffic_regions', []):
+                polygon = region.get('polygon', [])
+                if len(polygon) < 3:
+                    continue
+
+                # 根据状态选择颜色（从region的名称或标签中判断）
+                name = region.get('name', '').lower()
+                if '通畅' in name or 'smooth' in name:
+                    color = COLOR_REGION_GREEN
+                elif '缓慢' in name or 'slow' in name:
+                    color = COLOR_REGION_ORANGE
+                else:
+                    color = COLOR_REGION_RED
+
+                # 绘制填充多边形
+                pts = np.array(polygon, dtype=np.int32)
+                cv2.fillPoly(overlay_img, [pts], color)
+
+                # 绘制边框
+                cv2.polylines(frame, [pts], True, color, 2)
+
+                # 添加标签
+                label = region.get('label', '')
+                if label:
+                    # 计算多边形中心点
+                    M = cv2.moments(pts)
+                    if M['m00'] != 0:
+                        cx = int(M['m10'] / M['m00'])
+                        cy = int(M['m01'] / M['m00'])
+
+                        # 绘制文本背景
+                        (text_width, text_height), baseline = cv2.getTextSize(
+                            label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2
+                        )
+                        cv2.rectangle(
+                            frame,
+                            (cx - 5, cy - text_height - 5),
+                            (cx + text_width + 5, cy + 5),
+                            (0, 0, 0),
+                            -1
+                        )
+                        cv2.putText(
+                            frame, label, (cx, cy),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2
+                        )
+
+            # 叠加半透明层
+            cv2.addWeighted(overlay_img, 0.3, frame, 0.7, 0, frame)
+
+        # 2. 绘制禁停区（半透明多边形）
+        if active_scene == 'illegal_parking':
+            overlay_img = frame.copy()
+            for zone in overlay['data'].get('no_parking_zones', []):
+                polygon = zone.get('polygon', [])
+                if len(polygon) < 3:
+                    continue
+
+                pts = np.array(polygon, dtype=np.int32)
+                cv2.fillPoly(overlay_img, [pts], COLOR_ZONE)
+                cv2.polylines(frame, [pts], True, COLOR_ZONE, 2)
+
+                # 添加标签
+                label = zone.get('label', '禁停区')
+                if label:
+                    M = cv2.moments(pts)
+                    if M['m00'] != 0:
+                        cx = int(M['m10'] / M['m00'])
+                        cy = int(M['m01'] / M['m00'])
+                        (text_width, text_height), baseline = cv2.getTextSize(
+                            label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2
+                        )
+                        cv2.rectangle(
+                            frame,
+                            (cx - 5, cy - text_height - 5),
+                            (cx + text_width + 5, cy + 5),
+                            (0, 0, 0),
+                            -1
+                        )
+                        cv2.putText(
+                            frame, label, (cx, cy),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2
+                        )
+
+            cv2.addWeighted(overlay_img, 0.2, frame, 0.8, 0, frame)
+
+        # 3. 绘制车辆检测框
+        for vehicle in overlay['data'].get('vehicles', []):
+            bbox = vehicle.get('bbox', [])
+            if len(bbox) != 4:
+                continue
+
+            x1, y1, x2, y2 = bbox
+            label = vehicle.get('label', 'vehicle')
+
+            # 绘制矩形框
+            cv2.rectangle(frame, (x1, y1), (x2, y2), COLOR_VEHICLE, 2)
+
+            # 绘制标签背景
+            (text_width, text_height), baseline = cv2.getTextSize(
+                label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1
+            )
+            cv2.rectangle(
+                frame,
+                (x1, y1 - text_height - 8),
+                (x1 + text_width + 6, y1),
+                COLOR_VEHICLE,
+                -1
+            )
+
+            # 绘制文本
+            cv2.putText(
+                frame, label, (x1 + 3, y1 - 5),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1
+            )
+
+        # 4. 绘制车牌检测框
+        for plate in overlay['data'].get('plates', []):
+            bbox = plate.get('bbox', [])
+            if len(bbox) != 4:
+                continue
+
+            x1, y1, x2, y2 = bbox
+            label = plate.get('label', 'plate')
+
+            cv2.rectangle(frame, (x1, y1), (x2, y2), COLOR_PLATE, 2)
+
+            (text_width, text_height), baseline = cv2.getTextSize(
+                label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1
+            )
+            cv2.rectangle(
+                frame,
+                (x1, y1 - text_height - 8),
+                (x1 + text_width + 6, y1),
+                COLOR_PLATE,
+                -1
+            )
+            cv2.putText(
+                frame, label, (x1 + 3, y1 - 5),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1
+            )
+
+        # 5. 绘制违停状态
+        if active_scene == 'illegal_parking':
+            # 绘制违停告警（红色）
+            for illegal in overlay['data'].get('illegal_parking', []):
+                bbox = illegal.get('bbox', [])
+                if len(bbox) != 4:
+                    continue
+
+                x1, y1, x2, y2 = bbox
+                label = illegal.get('label', 'illegal')
+
+                cv2.rectangle(frame, (x1, y1), (x2, y2), COLOR_ILLEGAL, 3)
+
+                (text_width, text_height), baseline = cv2.getTextSize(
+                    label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2
+                )
+                cv2.rectangle(
+                    frame,
+                    (x1, y1 - text_height - 10),
+                    (x1 + text_width + 8, y1),
+                    COLOR_ILLEGAL,
+                    -1
+                )
+                cv2.putText(
+                    frame, label, (x1 + 4, y1 - 6),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2
+                )
+
+            # 绘制停车监控状态（橙色）
+            for status in overlay['data'].get('parking_statuses', []):
+                if status.get('has_warned'):
+                    continue  # 已告警的不重复绘制
+
+                bbox = status.get('bbox', [])
+                if len(bbox) != 4:
+                    continue
+
+                x1, y1, x2, y2 = bbox
+                label = status.get('label', 'parking')
+
+                cv2.rectangle(frame, (x1, y1), (x2, y2), COLOR_PARKING, 2)
+
+                (text_width, text_height), baseline = cv2.getTextSize(
+                    label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1
+                )
+                cv2.rectangle(
+                    frame,
+                    (x1, y1 - text_height - 8),
+                    (x1 + text_width + 6, y1),
+                    COLOR_PARKING,
+                    -1
+                )
+                cv2.putText(
+                    frame, label, (x1 + 3, y1 - 5),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1
+                )
+
+        # 6. 绘制道路异常
+        if active_scene == 'road_anomaly':
+            for anomaly in overlay['data'].get('road_anomalies', []):
+                bbox = anomaly.get('bbox', [])
+                if len(bbox) != 4:
+                    continue
+
+                x1, y1, x2, y2 = bbox
+                label = anomaly.get('label', 'anomaly')
+
+                cv2.rectangle(frame, (x1, y1), (x2, y2), COLOR_ANOMALY, 2)
+
+                (text_width, text_height), baseline = cv2.getTextSize(
+                    label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1
+                )
+                cv2.rectangle(
+                    frame,
+                    (x1, y1 - text_height - 8),
+                    (x1 + text_width + 6, y1),
+                    COLOR_ANOMALY,
+                    -1
+                )
+                cv2.putText(
+                    frame, label, (x1 + 3, y1 - 5),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1
+                )
+
+        return frame
 
     def set_parking_threshold(self, threshold_seconds, device_id=None):
         threshold_seconds = float(threshold_seconds)

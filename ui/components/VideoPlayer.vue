@@ -40,6 +40,7 @@ const pendingBoxes = ref([])
 const pendingSourceSize = ref(null)
 const playbackProtocol = ref('初始化')
 const videoViewport = ref({ left: 0, top: 0, width: 0, height: 0 })
+const showingAnnotatedFrame = ref(false)  // 新增：标记是否正在显示AI处理后的帧
 let hls = null
 let peerConnection = null
 let whepResourceUrl = ''
@@ -545,8 +546,104 @@ watch(() => props.webrtcSrc, async () => {
   updateCanvasSize()
 })
 
+// 新增：显示后端已绘制好的帧（优化版：使用 requestAnimationFrame 和离屏渲染）
+let pendingFrameUrl = null
+let isRendering = false
+
+const showAnnotatedFrame = (imageUrl, sequence) => {
+  const canvas = canvasRef.value
+  const video = videoRef.value
+  if (!canvas) {
+    URL.revokeObjectURL(imageUrl)
+    return
+  }
+
+  // 如果有待处理的旧帧，释放它
+  if (pendingFrameUrl) {
+    URL.revokeObjectURL(pendingFrameUrl)
+  }
+  pendingFrameUrl = imageUrl
+
+  // 标记正在显示AI处理后的帧
+  showingAnnotatedFrame.value = true
+
+  // 将video元素设置为不可见（但不停止播放，以便未来可以切换回去）
+  if (video && video.style.opacity !== '0') {
+    video.style.opacity = '0'
+  }
+
+  // 如果正在渲染，等下一轮
+  if (isRendering) {
+    return
+  }
+
+  isRendering = true
+
+  // 使用 requestAnimationFrame 确保在浏览器重绘前更新
+  requestAnimationFrame(() => {
+    const currentUrl = pendingFrameUrl
+    if (!currentUrl) {
+      isRendering = false
+      return
+    }
+    pendingFrameUrl = null
+
+    const img = new Image()
+    img.onload = () => {
+      const ctx = canvas.getContext('2d', { alpha: false })  // 禁用 alpha 通道加速渲染
+
+      // 使用 willReadFrequently 优化（如果需要频繁读取像素数据）
+      // const ctx = canvas.getContext('2d', { alpha: false, willReadFrequently: false })
+
+      // 计算缩放比例以适应canvas
+      const scale = Math.min(
+        canvas.width / img.width,
+        canvas.height / img.height
+      )
+
+      const scaledWidth = img.width * scale
+      const scaledHeight = img.height * scale
+
+      // 居中绘制
+      const x = (canvas.width - scaledWidth) / 2
+      const y = (canvas.height - scaledHeight) / 2
+
+      // 清空画布（使用 clearRect 比 fillRect 快）
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+
+      // 如果需要黑色背景（可选）
+      if (x > 0 || y > 0) {
+        ctx.fillStyle = '#000000'
+        ctx.fillRect(0, 0, canvas.width, canvas.height)
+      }
+
+      // 使用 imageSmoothingEnabled 控制缩放质量
+      ctx.imageSmoothingEnabled = true
+      ctx.imageSmoothingQuality = 'low'  // 'low' 最快，'high' 最慢
+
+      ctx.drawImage(img, x, y, scaledWidth, scaledHeight)
+
+      // 释放URL
+      URL.revokeObjectURL(currentUrl)
+      isRendering = false
+
+      // 如果有新帧在等待，立即处理
+      if (pendingFrameUrl) {
+        showAnnotatedFrame(pendingFrameUrl, sequence + 1)
+      }
+    }
+    img.onerror = () => {
+      console.error('图像加载失败')
+      URL.revokeObjectURL(currentUrl)
+      isRendering = false
+    }
+    img.src = currentUrl
+  })
+}
+
 defineExpose({
-  drawBoxes
+  drawBoxes,
+  showAnnotatedFrame
 })
 </script>
 
