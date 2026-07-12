@@ -1863,57 +1863,13 @@ class VideoProcessor:
         COLOR_REGION_ORANGE = (0, 165, 255) # 橙色 - 缓慢
         COLOR_REGION_RED = (0, 0, 255)      # 红色 - 拥堵
 
-        # 1. 绘制交通密度区域（半透明多边形）
-        if active_scene == 'traffic_density':
-            overlay_img = frame.copy()
-            for region in overlay['data'].get('traffic_regions', []):
-                polygon = region.get('polygon', [])
-                if len(polygon) < 3:
-                    continue
-
-                # 根据状态选择颜色（从region的名称或标签中判断）
-                name = region.get('name', '').lower()
-                if '通畅' in name or 'smooth' in name:
-                    color = COLOR_REGION_GREEN
-                elif '缓慢' in name or 'slow' in name:
-                    color = COLOR_REGION_ORANGE
-                else:
-                    color = COLOR_REGION_RED
-
-                # 绘制填充多边形
-                pts = np.array(polygon, dtype=np.int32)
-                cv2.fillPoly(overlay_img, [pts], color)
-
-                # 绘制边框
-                cv2.polylines(frame, [pts], True, color, 2)
-
-                # 添加标签
-                label = region.get('label', '')
-                if label:
-                    # 计算多边形中心点
-                    M = cv2.moments(pts)
-                    if M['m00'] != 0:
-                        cx = int(M['m10'] / M['m00'])
-                        cy = int(M['m01'] / M['m00'])
-
-                        # 绘制文本背景
-                        (text_width, text_height), baseline = cv2.getTextSize(
-                            label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2
-                        )
-                        cv2.rectangle(
-                            frame,
-                            (cx - 5, cy - text_height - 5),
-                            (cx + text_width + 5, cy + 5),
-                            (0, 0, 0),
-                            -1
-                        )
-                        cv2.putText(
-                            frame, label, (cx, cy),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2
-                        )
-
-            # 叠加半透明层
-            cv2.addWeighted(overlay_img, 0.3, frame, 0.7, 0, frame)
+        # 1. 绘制交通密度区域（半透明多边形）- 已禁用，只使用 AI 车道识别
+        # 注释掉固定的红色A/B/C/D区域框，避免与 AI 车道识别冲突
+        # if active_scene == 'traffic_density':
+        #     overlay_img = frame.copy()
+        #     for region in overlay['data'].get('traffic_regions', []):
+        #         ... (已禁用绘制固定区域)
+        pass  # 不绘制固定区域
 
         # 2. 绘制禁停区（半透明多边形）
         if active_scene == 'illegal_parking':
