@@ -52,6 +52,7 @@ from plate_recognition.plate_recognizer import (
     is_valid_plate_number,
     normalize_plate_number,
 )
+from lane_detection import LaneDetector
 
 # 添加父目录到Python路径以支持database模块导入
 CURRENT_DIR_VP = os.path.dirname(os.path.abspath(__file__))
@@ -198,9 +199,20 @@ class VideoProcessor:
                 event_cooldown_frames=int(os.getenv("ITS_ANOMALY_EVENT_COOLDOWN", "30")),
             )
             print("✅ 沙盘道路异常检测已启用")
+
+            # 初始化车道线检测器
+            self.lane_detector = LaneDetector(
+                min_line_length=int(os.getenv("ITS_LANE_MIN_LENGTH", "100")),
+                max_line_gap=int(os.getenv("ITS_LANE_MAX_GAP", "50")),
+                threshold=int(os.getenv("ITS_LANE_THRESHOLD", "50")),
+                vertical_tolerance=float(os.getenv("ITS_LANE_VERTICAL_TOLERANCE", "15.0")),
+                cache_frames=int(os.getenv("ITS_LANE_CACHE_FRAMES", "10")),
+            )
+            print("✅ 车道线检测器已初始化")
         except Exception as e:
             print(f"⚠️  沙盘道路异常检测初始化失败，将使用模拟降级: {str(e)}")
             self.anomaly_processor = None
+            self.lane_detector = None
 
         if self.disable_vehicle_mask:
             print("沙盘车辆掩膜已关闭，异常检测不会排除车辆框")
@@ -868,6 +880,7 @@ class VideoProcessor:
         timestamp = datetime.now().isoformat()
         state = self._get_or_create_runtime_state(device_id, frame.shape)
         state["processed_frames"] += 1
+        state["current_frame"] = frame  # 保存当前帧供车道检测使用
         active_scene = state.get("active_scene", "vehicle_detection")
 
         if not self.vehicle_detector:
@@ -1206,6 +1219,15 @@ class VideoProcessor:
             )
 
     def _build_traffic_density_event(self, device_id, state, tracked_vehicles, timestamp):
+        """
+        构建基于车道的交通流量热力图事件
+
+        新方案：
+        1. 检测画面中的车道分隔线（白色标线）
+        2. 根据车道线将画面划分为多个车道
+        3. 统计每个车道的车辆数量
+        4. 拥堵等级：1辆=绿色，2-3辆=橙色，>3辆=红色
+        """
         emit_every = max(1, int(state.get("density_emit_every_processed_frames", 3)))
         if state["processed_frames"] % emit_every != 0:
             return None
@@ -1217,18 +1239,30 @@ class VideoProcessor:
 
         height, width = frame_shape[:2]
 
-        # 网格配置（可通过state配置覆盖）
-        grid_cols = state.get("density_grid_cols", 20)
-        grid_rows = state.get("density_grid_rows", 15)
+        # 获取当前帧（用于车道线检测）
+        current_frame = state.get("current_frame")
+        if current_frame is None or not hasattr(self, 'lane_detector') or self.lane_detector is None:
+            # 降级方案：车道检测器未初始化，返回空热力图
+            return {
+                "event_type": "traffic_density",
+                "timestamp": timestamp,
+                "device_id": device_id,
+                "status": "normal",
+                "data": {
+                    "regions": [],
+                    "lane_lines": [],
+                },
+            }
 
-        # 计算每个网格的宽高
-        cell_width = width / grid_cols
-        cell_height = height / grid_rows
+        # ============ 步骤1：检测车道分隔线 ============
+        lane_lines = self.lane_detector.detect_lane_lines(current_frame)
 
-        # 初始化网格计数器
-        grid_counts = {}
+        # ============ 步骤2：划分车道区域 ============
+        lanes = self.lane_detector.divide_lanes(width, lane_lines)
 
-        # 统计每辆车所在的网格
+        # ============ 步骤3：统计每个车道的车辆数量 ============
+        lane_counts = {lane_id: 0 for lane_id, _, _ in lanes}
+
         invalid_bbox_count = 0
         for tracked in tracked_vehicles:
             bbox = tracked.get("bbox")
@@ -1247,83 +1281,66 @@ class VideoProcessor:
                 # 边界外的车辆（可能是跟踪器预测位置），跳过统计
                 continue
 
+            # 计算车辆底部中心点
             anchor = self._bottom_center(bbox)
-            x, y = anchor
+            vehicle_x, vehicle_y = anchor
 
-            # 计算车辆所在网格索引
-            col = int(x / cell_width)
-            row = int(y / cell_height)
-
-            # 边界检查
-            if 0 <= col < grid_cols and 0 <= row < grid_rows:
-                grid_key = (row, col)
-                grid_counts[grid_key] = grid_counts.get(grid_key, 0) + 1
+            # 判断车辆属于哪个车道
+            lane_id = self.lane_detector.assign_vehicle_to_lane(vehicle_x, lanes)
+            lane_counts[lane_id] = lane_counts.get(lane_id, 0) + 1
 
         if invalid_bbox_count > 0:
             print(f"⚠️  跳过 {invalid_bbox_count} 个无效bbox（格式错误或坐标异常）")
 
-        # 如果没有车辆，返回空regions数组而非None，确保前端状态一致
-        # 前端可以区分：None=未发送事件，空数组=检测为空
+        # ============ 步骤4：构建车道热力图数据 ============
         regions = []
-        if not grid_counts:
-            # 仍然返回事件，但regions为空，表示"检测完成但无车辆"
-            return {
-                "event_type": "traffic_density",
-                "timestamp": timestamp,
-                "device_id": device_id,
-                "status": "normal",
-                "data": {
-                    "regions": [],
-                },
-            }
 
-        thresholds = state.get("traffic_thresholds", {"smooth_max": 2, "slow_max": 5})
-        smooth_max = thresholds.get("smooth_max", 2)
-        slow_max = thresholds.get("slow_max", 5)
+        for lane_id, x_start, x_end in lanes:
+            count = lane_counts.get(lane_id, 0)
 
-        for (row, col), count in grid_counts.items():
-            # 计算网格的四个角坐标
-            x1 = col * cell_width
-            y1 = row * cell_height
-            x2 = x1 + cell_width
-            y2 = y1 + cell_height
+            # 如果车道无车辆，跳过（不推送空车道）
+            if count == 0:
+                continue
 
-            # 验证坐标合理性（防止浮点运算误差导致越界）
-            x1 = max(0, min(x1, width))
-            y1 = max(0, min(y1, height))
-            x2 = max(0, min(x2, width))
-            y2 = max(0, min(y2, height))
-
-            # 取整以避免前端渲染精度问题
-            polygon = [
-                [int(x1), int(y1)],
-                [int(x2), int(y1)],
-                [int(x2), int(y2)],
-                [int(x1), int(y2)]
-            ]
-
-            # 判断拥堵状态
-            if count <= smooth_max:
+            # 判断拥堵等级（新阈值）
+            if count == 1:
                 status = "smooth"
                 color = "green"
-            elif count <= slow_max:
+            elif 2 <= count <= 3:
                 status = "slow"
-                color = "yellow"
-            else:
+                color = "orange"  # 橙色
+            else:  # count > 3
                 status = "congested"
                 color = "red"
 
+            # 车道区域多边形（覆盖整个画面高度）
+            polygon = [
+                [int(x_start), 0],          # 左上角
+                [int(x_end), 0],            # 右上角
+                [int(x_end), int(height)],  # 右下角
+                [int(x_start), int(height)] # 左下角
+            ]
+
             regions.append({
-                "region_id": f"grid_{row}_{col}",
-                "name": f"区域{row}-{col}",
+                "region_id": f"lane_{lane_id}",
+                "name": f"车道{lane_id}",
                 "vehicle_count": count,
                 "status": status,
                 "color": color,
                 "polygon": polygon,
             })
 
-        summary = f"共{len(regions)}个网格有车辆，总计{sum(grid_counts.values())}辆"
-        print(f"traffic_density: {summary}")
+        # ============ 步骤5：构建车道分隔线数据（供前端绘制竖线） ============
+        lane_line_data = []
+        for x in lane_lines:
+            lane_line_data.append({
+                "x": int(x),
+                "y_start": 0,
+                "y_end": int(height),
+            })
+
+        summary = f"检测到{len(lanes)}个车道，{len(lane_lines)}条分隔线，共{sum(lane_counts.values())}辆车"
+        print(f"traffic_density (车道模式): {summary}")
 
         return {
             "event_type": "traffic_density",
@@ -1332,6 +1349,7 @@ class VideoProcessor:
             "status": "normal",
             "data": {
                 "regions": regions,
+                "lane_lines": lane_line_data,  # 新增：车道分隔线数据
             },
         }
 
