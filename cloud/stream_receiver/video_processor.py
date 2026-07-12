@@ -110,7 +110,7 @@ class VideoProcessor:
         self.plate_conf = float(os.getenv("ITS_PLATE_CONF", "0.20"))
 
         # 性能优化参数
-        self.plate_recognition_skip = int(os.getenv("ITS_PLATE_RECOGNITION_SKIP", "3"))
+        self.plate_recognition_skip = int(os.getenv("ITS_PLATE_RECOGNITION_SKIP", "1"))  # 改为 1，每帧都检测
         self.overlay_push_skip = int(os.getenv("ITS_OVERLAY_PUSH_SKIP", "1"))
         self.plate_in_vehicle_scene = os.getenv(
             "ITS_PLATE_IN_VEHICLE_SCENE", "false"
