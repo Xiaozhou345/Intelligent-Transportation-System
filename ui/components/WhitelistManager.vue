@@ -1,5 +1,5 @@
 <script setup>
-import { reactive, ref } from 'vue'
+import { reactive, ref, onMounted } from 'vue'
 import { ElButton, ElDialog, ElForm, ElFormItem, ElInput, ElMessage, ElTable, ElTableColumn, ElTag } from 'element-plus'
 
 const emit = defineEmits(['send-command'])
@@ -11,6 +11,21 @@ const form = reactive({
   plate: '',
   owner: '',
   role: ''
+})
+
+// 从数据库加载白名单
+onMounted(() => {
+  if (window.initialWhitelist && window.initialWhitelist.length > 0) {
+    whitelist.value = window.initialWhitelist.map(item => ({
+      id: item.id,
+      plate: item.plate_number,
+      owner: item.owner || '未知',
+      role: item.vehicle_type || 'visitor',
+      status: item.permission_status === 1 ? 'enabled' : 'disabled',
+      remark: item.remark
+    }))
+    console.log(`✅ WhitelistManager 加载了 ${whitelist.value.length} 条白名单`)
+  }
 })
 
 const resetForm = () => {

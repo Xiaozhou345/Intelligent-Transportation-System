@@ -505,6 +505,223 @@ def get_anomaly_status():
     return jsonify(video_processor.get_anomaly_status(device_id=request.args.get('device_id'))), 200
 
 
+# ==================== 历史数据查询 API ====================
+
+@app.route('/api/history/events', methods=['GET'])
+def get_history_events():
+    """
+    查询历史识别事件
+
+    参数:
+        event_type: 事件类型 (可选)
+        device_id: 设备ID (可选)
+        limit: 返回记录数 (默认50，最大1000)
+        offset: 偏移量 (默认0)
+    """
+    try:
+        from database import mysql_client
+
+        if not mysql_client.check_connection():
+            return jsonify({
+                "status": "error",
+                "message": "数据库连接失败",
+                "data": []
+            }), 503
+
+        event_type = request.args.get('event_type')
+        device_id = request.args.get('device_id')
+        limit = min(int(request.args.get('limit', 50)), 1000)
+        offset = int(request.args.get('offset', 0))
+
+        with mysql_client.get_connection() as conn:
+            with conn.cursor() as cursor:
+                # 构建查询
+                where_clauses = []
+                params = []
+
+                if event_type:
+                    where_clauses.append('event_type = %s')
+                    params.append(event_type)
+
+                if device_id:
+                    where_clauses.append('device_id = %s')
+                    params.append(device_id)
+
+                where_sql = ' AND '.join(where_clauses) if where_clauses else '1=1'
+
+                # 查询数据
+                sql = f'''
+                SELECT id, event_type, device_id, scene_id, plate_number,
+                       bbox, result_json, created_at
+                FROM recognition_event
+                WHERE {where_sql}
+                ORDER BY created_at DESC
+                LIMIT %s OFFSET %s
+                '''
+                params.extend([limit, offset])
+
+                cursor.execute(sql, params)
+                events = cursor.fetchall()
+
+                # 查询总数
+                count_sql = f'SELECT COUNT(*) as total FROM recognition_event WHERE {where_sql}'
+                cursor.execute(count_sql, params[:-2])
+                total = cursor.fetchone()['total']
+
+                return jsonify({
+                    "status": "success",
+                    "data": events,
+                    "total": total,
+                    "limit": limit,
+                    "offset": offset
+                })
+
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e),
+            "data": []
+        }), 500
+
+
+@app.route('/api/history/alarms', methods=['GET'])
+def get_history_alarms():
+    """
+    查询历史告警记录
+
+    参数:
+        alarm_type: 告警类型 (可选)
+        device_id: 设备ID (可选)
+        status: 告警状态 (可选: warning, acknowledged, resolved)
+        limit: 返回记录数 (默认50，最大1000)
+        offset: 偏移量 (默认0)
+    """
+    try:
+        from database import mysql_client
+
+        if not mysql_client.check_connection():
+            return jsonify({
+                "status": "error",
+                "message": "数据库连接失败",
+                "data": []
+            }), 503
+
+        alarm_type = request.args.get('alarm_type')
+        device_id = request.args.get('device_id')
+        status = request.args.get('status')
+        limit = min(int(request.args.get('limit', 50)), 1000)
+        offset = int(request.args.get('offset', 0))
+
+        with mysql_client.get_connection() as conn:
+            with conn.cursor() as cursor:
+                where_clauses = []
+                params = []
+
+                if alarm_type:
+                    where_clauses.append('alarm_type = %s')
+                    params.append(alarm_type)
+
+                if device_id:
+                    where_clauses.append('device_id = %s')
+                    params.append(device_id)
+
+                if status:
+                    where_clauses.append('status = %s')
+                    params.append(status)
+
+                where_sql = ' AND '.join(where_clauses) if where_clauses else '1=1'
+
+                sql = f'''
+                SELECT id, alarm_type, device_id, scene_id, target_type, target_id,
+                       plate_number, description, bbox, status, detail_json,
+                       created_at, resolved_at
+                FROM alarm_record
+                WHERE {where_sql}
+                ORDER BY created_at DESC
+                LIMIT %s OFFSET %s
+                '''
+                params.extend([limit, offset])
+
+                cursor.execute(sql, params)
+                alarms = cursor.fetchall()
+
+                count_sql = f'SELECT COUNT(*) as total FROM alarm_record WHERE {where_sql}'
+                cursor.execute(count_sql, params[:-2])
+                total = cursor.fetchone()['total']
+
+                return jsonify({
+                    "status": "success",
+                    "data": alarms,
+                    "total": total,
+                    "limit": limit,
+                    "offset": offset
+                })
+
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e),
+            "data": []
+        }), 500
+
+
+@app.route('/api/whitelist', methods=['GET'])
+def get_whitelist():
+    """获取车牌白名单"""
+    try:
+        from database import mysql_client
+
+        if not mysql_client.check_connection():
+            return jsonify({
+                "status": "error",
+                "message": "数据库连接失败",
+                "data": []
+            }), 503
+
+        with mysql_client.get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute('''
+                SELECT id, plate_number, owner, vehicle_type,
+                       permission_status, remark, created_at, updated_at
+                FROM vehicle_whitelist
+                ORDER BY created_at DESC
+                ''')
+                whitelist = cursor.fetchall()
+
+                return jsonify({
+                    "status": "success",
+                    "data": whitelist
+                })
+
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e),
+            "data": []
+        }), 500
+
+
+@app.route('/api/config', methods=['GET'])
+def get_system_config():
+    """获取系统配置"""
+    try:
+        from database import mysql_client
+
+        config = mysql_client.load_system_config()
+
+        return jsonify({
+            "status": "success",
+            "data": config
+        })
+
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e),
+            "data": {}
+        }), 500
+
+
 # ==================== WebSocket 事件处理 ====================
 
 def system_status_background_task():

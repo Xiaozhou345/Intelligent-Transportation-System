@@ -606,9 +606,62 @@ const routeEvent = (data) => {
   }
 }
 
+// 加载历史数据和白名单
+const loadHistoryData = async () => {
+  try {
+    console.log('🔄 开始加载历史数据...')
+
+    // 1. 加载历史识别事件（最近50条）
+    const eventsRes = await fetch(`${CLOUD_SERVER_URL}/api/history/events?limit=50`)
+    if (eventsRes.ok) {
+      const eventsData = await eventsRes.json()
+      if (eventsData.status === 'success' && eventsData.data.length > 0) {
+        // 转换数据格式以匹配前端
+        const historyEvents = eventsData.data.map(event => ({
+          event_type: event.event_type,
+          device_id: event.device_id,
+          timestamp: event.created_at,
+          status: 'normal',
+          data: event.result_json || {},
+          plate_number: event.plate_number
+        }))
+        // 将历史数据添加到事件记录（放在最前面）
+        eventRecords.value = [...historyEvents, ...eventRecords.value]
+        console.log(`✅ 加载了 ${historyEvents.length} 条历史事件`)
+      }
+    }
+
+    // 2. 加载白名单
+    const whitelistRes = await fetch(`${CLOUD_SERVER_URL}/api/whitelist`)
+    if (whitelistRes.ok) {
+      const whitelistData = await whitelistRes.json()
+      if (whitelistData.status === 'success') {
+        console.log(`✅ 加载了 ${whitelistData.data.length} 条白名单`)
+        // 将白名单数据存储到全局状态（供 WhitelistManager 使用）
+        window.initialWhitelist = whitelistData.data
+      }
+    }
+
+    // 3. 加载系统配置
+    const configRes = await fetch(`${CLOUD_SERVER_URL}/api/config`)
+    if (configRes.ok) {
+      const configData = await configRes.json()
+      if (configData.status === 'success') {
+        console.log(`✅ 加载了系统配置:`, Object.keys(configData.data))
+        window.systemConfig = configData.data
+      }
+    }
+  } catch (error) {
+    console.warn('⚠️  加载历史数据失败:', error.message)
+  }
+}
+
 onMounted(() => {
   if (isPublisherMode) return
   loadSavedUser()
+
+  // 加载历史数据
+  loadHistoryData()
 
   clockTimer = setInterval(() => {
     currentTime.value = new Date()
