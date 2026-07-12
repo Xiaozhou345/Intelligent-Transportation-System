@@ -112,6 +112,11 @@ class VideoProcessor:
         # 车牌号缓存：{device_id: [(bbox, plate_number, timestamp), ...]}
         self.plate_cache: Dict[str, List[tuple]] = {}
 
+        # 车牌事件去重缓存：{device_id: {plate_number: last_sent_timestamp}}
+        # 用于防止同一车牌短时间内重复推送到前端
+        self.sent_plates: Dict[str, Dict[str, float]] = {}
+        self.plate_cooldown = float(os.getenv("ITS_PLATE_COOLDOWN", "30.0"))  # 默认30秒冷却时间
+
         self.runtime_defaults = self._load_runtime_defaults()
         self.runtime_state: Dict[str, dict] = {}
 
@@ -995,11 +1000,43 @@ class VideoProcessor:
             perf_timings['plate_recognition'] = 0
 
         # 将车牌识别结果发送到前端（仅在相关场景下发送，保持与其他事件的一致性）
+        # 添加去重逻辑：同一车牌在冷却时间内只发送一次
         if plates_refreshed and active_scene in ['vehicle_detection', 'plate_recognition']:
+            current_time = time.time()
+
+            # 初始化设备的车牌记录
+            if device_id not in self.sent_plates:
+                self.sent_plates[device_id] = {}
+
+            # 清理过期记录（保留最近60秒的记录，避免内存泄漏）
+            expired_plates = [
+                plate_num for plate_num, last_time in self.sent_plates[device_id].items()
+                if current_time - last_time > 60.0
+            ]
+            for plate_num in expired_plates:
+                del self.sent_plates[device_id][plate_num]
+
             for plate_event in plate_events:
+                plate_number = plate_event['data'].get('plate_number', '')
+
+                # 如果车牌号有效，检查是否在冷却时间内
+                if plate_number:
+                    last_sent_time = self.sent_plates[device_id].get(plate_number, 0)
+                    time_since_last_sent = current_time - last_sent_time
+
+                    # 如果在冷却时间内，跳过发送
+                    if time_since_last_sent < self.plate_cooldown:
+                        if frame_count % 30 == 0:
+                            print(f"⏭️  车牌 {plate_number} 在冷却期内 ({time_since_last_sent:.1f}s < {self.plate_cooldown}s)，跳过推送")
+                        continue
+
+                    # 更新最后发送时间
+                    self.sent_plates[device_id][plate_number] = current_time
+
+                # 发送事件
                 self._send_result(plate_event)
                 if frame_count % 30 == 0:
-                    print(f"车牌识别: {plate_event['data'].get('plate_number', '未识别')} conf={plate_event['data']['confidence']:.2f}")
+                    print(f"📤 车牌识别推送: {plate_number or '未识别'} conf={plate_event['data']['confidence']:.2f}")
 
         if vehicles and frame_count % 30 == 0:
             vehicle_debug = [
