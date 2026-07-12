@@ -85,6 +85,90 @@ class RoadAnomalyProcessorTest(unittest.TestCase):
 
         self.assertEqual([], events)
 
+    def test_adaptive_vehicle_padding_removes_edge_fragments(self):
+        processor = self.build_processor()
+
+        vehicle_frame = self.background.copy()
+        cv2.rectangle(vehicle_frame, (260, 180), (400, 300), (30, 30, 30), -1)
+        # A narrow shadow/body edge falls outside the raw detector box. Fixed
+        # six-pixel padding used to expose it as a separate road anomaly.
+        cv2.rectangle(vehicle_frame, (244, 304), (416, 318), (65, 65, 65), -1)
+
+        events = []
+        for _ in range(8):
+            events.extend(processor.process_frame(
+                device_id="mobile_001",
+                frame=vehicle_frame,
+                vehicle_bboxes=[[260, 180, 400, 300]],
+                road_mask=self.clean_road,
+            ))
+
+        self.assertEqual([], events)
+        self.assertEqual([], processor.get_current_results())
+
+    def test_calibrated_road_texture_is_not_a_single_frame_outlier(self):
+        textured_road = self.background.copy()
+        cv2.rectangle(textured_road, (120, 220), (190, 290), (50, 50, 50), -1)
+        detector = AnomalyDetector(
+            warmup_frames=0,
+            static_frames_threshold=3,
+            min_area=300,
+            use_default_road_scope=False,
+        )
+        processor = RoadAnomalyProcessor(detector=detector)
+        for _ in range(8):
+            self.assertTrue(processor.update_background(textured_road, road_mask=self.clean_road))
+
+        events = []
+        for _ in range(6):
+            events.extend(processor.process_frame(
+                device_id="mobile_001",
+                frame=textured_road,
+                vehicle_bboxes=[],
+                road_mask=self.clean_road,
+            ))
+
+        self.assertEqual([], events)
+        self.assertEqual([], processor.get_current_results())
+
+    def test_large_global_scene_change_is_suppressed(self):
+        processor = self.build_processor(max_foreground_ratio=0.12)
+        shifted_frame = self.background.copy()
+        shifted_frame[self.clean_road > 0] = 35
+
+        events = []
+        for _ in range(6):
+            events.extend(processor.process_frame(
+                device_id="mobile_001",
+                frame=shifted_frame,
+                vehicle_bboxes=[],
+                road_mask=self.clean_road,
+            ))
+
+        self.assertEqual([], events)
+        self.assertEqual([], processor.get_current_results())
+
+    def test_fragmented_foreground_is_merged_and_capped(self):
+        processor = self.build_processor(component_merge_kernel=13, max_candidates=3)
+        frame = self.background.copy()
+        cv2.rectangle(frame, (100, 160), (128, 210), (30, 30, 30), -1)
+        cv2.rectangle(frame, (136, 160), (164, 210), (30, 30, 30), -1)
+        for x in (230, 320, 410, 500):
+            cv2.rectangle(frame, (x, 250), (x + 30, 285), (30, 30, 30), -1)
+
+        for _ in range(6):
+            processor.process_frame(
+                device_id="mobile_001",
+                frame=frame,
+                vehicle_bboxes=[],
+                road_mask=self.clean_road,
+            )
+
+        current = processor.get_current_results()
+        self.assertLessEqual(len(current), 3)
+        merged = [event for event in current if event["bbox"][0] < 200]
+        self.assertEqual(1, len(merged))
+
     def test_roi_and_lane_marking_filters(self):
         processor = self.build_processor(
             road_roi=[[40, 80], [520, 80], [520, 430], [40, 430]],

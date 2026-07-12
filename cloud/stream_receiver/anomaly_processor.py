@@ -31,6 +31,7 @@ class RoadAnomalyProcessor:
         emit_normal=False,
         warning_only=True,
         event_cooldown_frames=30,
+        max_current_results=3,
         drivable_model_path=None,
         drivable_confidence=0.15,
     ):
@@ -42,6 +43,7 @@ class RoadAnomalyProcessor:
             emit_normal: Whether to return non-warning anomaly candidates.
             warning_only: Whether process_frame returns only warning events.
             event_cooldown_frames: Re-emit same warning after this many stable frames.
+            max_current_results: Maximum simultaneous boxes exposed to the overlay.
             drivable_model_path: Optional YOLO-seg model for road-area masking.
             drivable_confidence: Confidence threshold for drivable segmentation.
         """
@@ -51,6 +53,7 @@ class RoadAnomalyProcessor:
         self.emit_normal = emit_normal
         self.warning_only = warning_only
         self.event_cooldown_frames = max(1, int(event_cooldown_frames))
+        self.max_current_results = max(1, int(max_current_results))
         self.last_emitted_frames = {}
         self.processed_frames = 0
         self.recent_warning_regions = deque(maxlen=max_results)
@@ -103,7 +106,8 @@ class RoadAnomalyProcessor:
         events = []
         current_results = []
 
-        for anomaly in anomalies:
+        anomalies = sorted(anomalies, key=lambda item: item.get("area", 0), reverse=True)
+        for anomaly in anomalies[:self.max_current_results]:
             if self.warning_only and anomaly["status"] != "warning":
                 continue
             if not self.emit_normal and anomaly["status"] == "normal":

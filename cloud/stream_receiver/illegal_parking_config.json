@@ -40,7 +40,7 @@
     "parking_min_history": 3,
     "density_emit_every_processed_frames": 3,
     "anomaly_mode": "background_learning",
-    "anomaly_min_background_frames": 12,
+    "anomaly_min_background_frames": 20,
     "anomaly_road_roi": [
       [0.03, 0.42],
       [0.86, 0.42],

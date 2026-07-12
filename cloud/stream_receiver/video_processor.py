@@ -148,7 +148,7 @@ class VideoProcessor:
             "active_scene": "vehicle_detection",
             "anomaly_mode": "background_learning",
             "anomaly_road_roi": [],
-            "anomaly_min_background_frames": 8,
+            "anomaly_min_background_frames": 20,
         }
         if not config_path.exists():
             print("⚠️  未找到 illegal_parking_config.json，将使用内置默认配置")
@@ -191,21 +191,30 @@ class VideoProcessor:
                 print("沙盘道路分割模型未启用，将使用默认道路ROI")
 
             detector = AnomalyDetector(
-                min_area=int(os.getenv("ITS_ANOMALY_MIN_AREA", "300")),
+                min_area=int(os.getenv("ITS_ANOMALY_MIN_AREA", "700")),
                 max_area=int(os.getenv("ITS_ANOMALY_MAX_AREA", "0")) or None,
                 max_area_ratio=float(os.getenv("ITS_ANOMALY_MAX_AREA_RATIO", "0.08")),
-                static_frames_threshold=int(os.getenv("ITS_ANOMALY_STATIC_FRAMES", "3")),
+                static_frames_threshold=int(os.getenv("ITS_ANOMALY_STATIC_FRAMES", "6")),
                 max_missed_frames=int(os.getenv("ITS_ANOMALY_MAX_MISSED", "4")),
+                vehicle_mask_padding=int(os.getenv("ITS_VEHICLE_MASK_PADDING", "16")),
+                vehicle_mask_padding_ratio=float(os.getenv("ITS_VEHICLE_MASK_PADDING_RATIO", "0.10")),
                 road_roi=self._scale_polygon_for_base_size(self.runtime_defaults.get("anomaly_road_roi", [])),
+                road_scope_erode=int(os.getenv("ITS_ANOMALY_ROAD_EDGE_MARGIN", "6")),
                 warmup_frames=int(os.getenv("ITS_ANOMALY_WARMUP_FRAMES", "0")),
                 learning_rate=float(os.getenv("ITS_ANOMALY_LEARNING_RATE", "0")),
+                background_learning_rate=float(os.getenv("ITS_ANOMALY_BG_LEARNING_RATE", "-1")),
+                startup_static_check=os.getenv("ITS_STARTUP_STATIC_CHECK", "false").lower() == "true",
                 startup_static_kernel=int(os.getenv("ITS_STARTUP_STATIC_KERNEL", "55")),
                 startup_static_dilate=int(os.getenv("ITS_STARTUP_STATIC_DILATE", "7")),
-                road_surface_outlier_check=os.getenv("ITS_ROAD_SURFACE_OUTLIER", "true").lower() == "true",
-                outlier_min_area=int(os.getenv("ITS_OUTLIER_MIN_AREA", "180")),
-                outlier_color_distance=float(os.getenv("ITS_OUTLIER_COLOR_DISTANCE", "20")),
+                road_surface_outlier_check=os.getenv("ITS_ROAD_SURFACE_OUTLIER", "false").lower() == "true",
+                outlier_min_area=int(os.getenv("ITS_OUTLIER_MIN_AREA", "700")),
+                outlier_color_distance=float(os.getenv("ITS_OUTLIER_COLOR_DISTANCE", "30")),
                 outlier_max_area=int(os.getenv("ITS_OUTLIER_MAX_AREA", "30000")),
                 min_road_overlap=float(os.getenv("ITS_ANOMALY_MIN_ROAD_OVERLAP", "0.85")),
+                min_component_extent=float(os.getenv("ITS_ANOMALY_MIN_EXTENT", "0.16")),
+                component_merge_kernel=int(os.getenv("ITS_ANOMALY_MERGE_KERNEL", "11")),
+                max_candidates=int(os.getenv("ITS_ANOMALY_MAX_CANDIDATES", "3")),
+                max_foreground_ratio=float(os.getenv("ITS_ANOMALY_MAX_FOREGROUND_RATIO", "0.16")),
                 filter_lane_markings=os.getenv("ITS_FILTER_LANE_MARKINGS", "true").lower() == "true",
                 use_default_road_scope=os.getenv("ITS_USE_DEFAULT_ROAD_SCOPE", "true").lower() == "true",
                 max_background_vehicle_ratio=float(os.getenv("ITS_BG_MAX_VEHICLE_RATIO", "0.18")),
@@ -214,6 +223,7 @@ class VideoProcessor:
                 detector=detector,
                 drivable_model_path=drivable_model_path,
                 event_cooldown_frames=int(os.getenv("ITS_ANOMALY_EVENT_COOLDOWN", "30")),
+                max_current_results=int(os.getenv("ITS_ANOMALY_MAX_RESULTS", "3")),
             )
             print("✅ 沙盘道路异常检测已启用")
 

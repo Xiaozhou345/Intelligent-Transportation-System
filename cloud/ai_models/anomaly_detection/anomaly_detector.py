@@ -24,18 +24,25 @@ class AnomalyDetector:
         static_frames_threshold=15,
         match_distance=50,
         max_missed_frames=3,
-        vehicle_mask_padding=6,
+        vehicle_mask_padding=16,
+        vehicle_mask_padding_ratio=0.10,
         road_roi=None,
+        road_scope_erode=6,
         warmup_frames=30,
         learning_rate=0,
+        background_learning_rate=-1,
         startup_static_check=True,
         startup_static_kernel=35,
         startup_static_dilate=3,
-        road_surface_outlier_check=True,
+        road_surface_outlier_check=False,
         outlier_min_area=250,
         outlier_color_distance=28,
         outlier_max_area=30000,
         min_road_overlap=0.65,
+        min_component_extent=0.16,
+        component_merge_kernel=11,
+        max_candidates=3,
+        max_foreground_ratio=0.16,
         filter_lane_markings=True,
         use_default_road_scope=False,
         max_background_vehicle_ratio=0.18,
@@ -53,9 +60,12 @@ class AnomalyDetector:
             match_distance: Cross-frame center matching distance.
             max_missed_frames: Frames a tracked anomaly can disappear before reset.
             vehicle_mask_padding: Padding around YOLO vehicle boxes.
+            vehicle_mask_padding_ratio: Additional padding relative to vehicle size.
             road_roi: Optional polygon limiting the active road area.
+            road_scope_erode: Pixels removed from the road-scope boundary.
             warmup_frames: Initial frames used to build background if not fed manually.
             learning_rate: Detection-time background update rate. Use 0 to freeze.
+            background_learning_rate: MOG2 rate used during explicit calibration.
             startup_static_check: Detect road-mask holes that may be objects present
                 from the first frame.
             startup_static_kernel: Closing kernel size used to recover the expected
@@ -67,6 +77,11 @@ class AnomalyDetector:
             outlier_color_distance: LAB distance from estimated road surface.
             outlier_max_area: Maximum compact candidate area for surface outliers.
             min_road_overlap: Minimum component-mask overlap with road scope.
+            min_component_extent: Minimum contour-to-bounding-box fill ratio.
+            component_merge_kernel: Closing kernel used to join object fragments.
+            max_candidates: Maximum simultaneous candidates kept per frame.
+            max_foreground_ratio: Treat frames with broad road changes as noisy and
+                keep only the strongest candidate.
             filter_lane_markings: Remove bright lane-marking-like components.
             use_default_road_scope: Use a sandbox fallback ROI when no mask/ROI is supplied.
             max_background_vehicle_ratio: Skip background learning when vehicle masks
@@ -82,9 +97,12 @@ class AnomalyDetector:
         self.match_distance = match_distance
         self.max_missed_frames = max_missed_frames
         self.vehicle_mask_padding = vehicle_mask_padding
+        self.vehicle_mask_padding_ratio = max(0.0, float(vehicle_mask_padding_ratio))
         self.road_roi = road_roi
+        self.road_scope_erode = max(0, int(road_scope_erode))
         self.warmup_frames = warmup_frames
         self.learning_rate = learning_rate
+        self.background_learning_rate = float(background_learning_rate)
         self.startup_static_check = startup_static_check
         self.startup_static_kernel = startup_static_kernel if startup_static_kernel % 2 else startup_static_kernel + 1
         self.startup_static_dilate = max(0, int(startup_static_dilate))
@@ -93,6 +111,10 @@ class AnomalyDetector:
         self.outlier_color_distance = outlier_color_distance
         self.outlier_max_area = outlier_max_area
         self.min_road_overlap = min_road_overlap
+        self.min_component_extent = max(0.0, float(min_component_extent))
+        self.component_merge_kernel = max(0, int(component_merge_kernel))
+        self.max_candidates = max(0, int(max_candidates))
+        self.max_foreground_ratio = max(0.0, float(max_foreground_ratio))
         self.filter_lane_markings = filter_lane_markings
         self.use_default_road_scope = use_default_road_scope
         self.max_background_vehicle_ratio = max_background_vehicle_ratio
@@ -124,7 +146,7 @@ class AnomalyDetector:
             frame = frame.copy()
             fill_color = self._estimate_road_fill_color(frame, scope, vehicle_mask)
             frame[vehicle_mask > 0] = fill_color
-        self.bg_subtractor.apply(frame, learningRate=1)
+        self.bg_subtractor.apply(frame, learningRate=self.background_learning_rate)
         self.background_frames += 1
         return True
 
@@ -175,7 +197,15 @@ class AnomalyDetector:
         if road_scope is not None:
             fg_mask = cv2.bitwise_and(fg_mask, road_scope)
 
-        return self._track_components(fg_mask, frame=frame, road_scope=road_scope)
+        noisy_frame = self._foreground_too_large(fg_mask, road_scope)
+        fg_mask = self._merge_component_fragments(fg_mask)
+
+        return self._track_components(
+            fg_mask,
+            frame=frame,
+            road_scope=road_scope,
+            candidate_limit=1 if noisy_frame else None,
+        )
 
     def _detect_startup_static_mask(self, frame, vehicle_bboxes=None, road_mask=None):
         """Find likely objects that already existed before MOG2 background warmup.
@@ -358,15 +388,23 @@ class AnomalyDetector:
         if scope is None and self.use_default_road_scope:
             scope = self._build_default_sandbox_road_scope(shape)
 
+        if scope is not None and self.road_scope_erode > 0:
+            size = self.road_scope_erode * 2 + 1
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size))
+            eroded = cv2.erode(scope, kernel, iterations=1)
+            if cv2.countNonZero(eroded) > 0:
+                scope = eroded
+
         return scope
 
-    def _track_components(self, mask, frame=None, road_scope=None):
+    def _track_components(self, mask, frame=None, road_scope=None, candidate_limit=None):
         if mask is None:
             return self._age_unmatched_tracks(set())
 
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         current_anomalies = []
         matched_ids = set()
+        candidates = []
 
         for contour in contours:
             area = cv2.contourArea(contour)
@@ -376,6 +414,9 @@ class AnomalyDetector:
                 continue
 
             x, y, w, h = cv2.boundingRect(contour)
+            extent = area / float(max(1, w * h))
+            if extent < self.min_component_extent:
+                continue
             if self._is_low_road_overlap(contour, mask.shape, road_scope):
                 continue
             if frame is not None and self._is_lane_marking_like(frame, contour, (x, y, w, h)):
@@ -383,6 +424,14 @@ class AnomalyDetector:
 
             bbox = [x, y, x + w, y + h]
             center = [x + w // 2, y + h // 2]
+            candidates.append((area, center, bbox))
+
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        limit = self.max_candidates if candidate_limit is None else max(0, int(candidate_limit))
+        if limit > 0:
+            candidates = candidates[:limit]
+
+        for area, center, bbox in candidates:
             current_anomalies.append(
                 self._match_or_create_anomaly(center, bbox, int(area), matched_ids)
             )
@@ -520,12 +569,38 @@ class AnomalyDetector:
         mask = np.zeros(frame_shape[:2], dtype=np.uint8)
         for bbox in vehicle_bboxes or []:
             x1, y1, x2, y2 = self._clip_bbox(bbox, frame_shape)
-            x1 = max(0, x1 - self.vehicle_mask_padding)
-            y1 = max(0, y1 - self.vehicle_mask_padding)
-            x2 = min(frame_shape[1], x2 + self.vehicle_mask_padding)
-            y2 = min(frame_shape[0], y2 + self.vehicle_mask_padding)
+            adaptive_padding = int(round(max(x2 - x1, y2 - y1) * self.vehicle_mask_padding_ratio))
+            padding = max(self.vehicle_mask_padding, adaptive_padding)
+            x1 = max(0, x1 - padding)
+            y1 = max(0, y1 - padding)
+            x2 = min(frame_shape[1], x2 + padding)
+            y2 = min(frame_shape[0], y2 + padding)
             cv2.rectangle(mask, (x1, y1), (x2, y2), 255, -1)
         return mask
+
+    def _foreground_too_large(self, mask, road_scope):
+        if mask is None or self.max_foreground_ratio <= 0:
+            return False
+
+        active_mask = road_scope
+        if active_mask is None or cv2.countNonZero(active_mask) == 0:
+            active_pixels = mask.shape[0] * mask.shape[1]
+            foreground_pixels = cv2.countNonZero(mask)
+        else:
+            active_pixels = cv2.countNonZero(active_mask)
+            foreground_pixels = cv2.countNonZero(cv2.bitwise_and(mask, active_mask))
+
+        return active_pixels > 0 and foreground_pixels / float(active_pixels) > self.max_foreground_ratio
+
+    def _merge_component_fragments(self, mask):
+        if mask is None or self.component_merge_kernel <= 1:
+            return mask
+
+        size = self.component_merge_kernel
+        if size % 2 == 0:
+            size += 1
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size))
+        return cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
 
     def _cleanup_mask(self, mask):
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
