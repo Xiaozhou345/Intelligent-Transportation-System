@@ -220,6 +220,12 @@ class VehicleTracker:
 
         print("车辆跟踪器初始化完成")
 
+    def reset(self):
+        """重置跟踪器状态（用于视频流切换或场景变化）"""
+        self.frame_id = 0
+        self.tracked_tracks = []
+        self.lost_tracks = []
+
     @staticmethod
     def iou(bbox1, bbox2):
         """计算两个bbox的IoU"""

@@ -64,6 +64,33 @@ class IllegalParkingMonitor:
         seen_track_ids = set()
         events = []
 
+        # 调试信息：首次调用时（无论有无车辆）记录禁停区配置
+        if not hasattr(self, '_debug_logged'):
+            if len(self.zones) == 0:
+                print(f"❌ 违停监控错误: 未配置禁停区！zones={self.zones}")
+            else:
+                print(f"✅ 违停监控初始化: 配置了 {len(self.zones)} 个禁停区")
+                for zone in self.zones:
+                    zone_name = zone.get('name', zone.get('zone_id'))
+                    polygon = zone.get('polygon', [])
+                    threshold = zone.get('threshold_seconds', 30)
+                    print(f"   - {zone_name}: 阈值={threshold}秒, polygon={len(polygon)}个顶点")
+                    if polygon and len(polygon) > 0:
+                        # 显示多边形范围
+                        xs = [p[0] for p in polygon]
+                        ys = [p[1] for p in polygon]
+                        print(f"     范围: X[{min(xs):.0f}-{max(xs):.0f}] Y[{min(ys):.0f}-{max(ys):.0f}]")
+                print(f"   - 静止阈值: {self.stationary_pixel_threshold} 像素")
+                print(f"   - 最小历史: {self.min_history} 帧")
+            self._debug_logged = True
+
+        # 无条件输出：每次调用都记录（便于诊断）
+        if not hasattr(self, '_update_call_count'):
+            self._update_call_count = 0
+        self._update_call_count += 1
+        if self._update_call_count % 30 == 0:
+            print(f"🚨 illegal_parking.update() 第{self._update_call_count}次调用, 收到 {len(tracked_vehicles)} 辆跟踪车辆")
+
         for tracked in tracked_vehicles:
             track_id = tracked['track_id']
             bbox = [int(v) for v in tracked['bbox']]
@@ -89,13 +116,28 @@ class IllegalParkingMonitor:
                 state.anchor_history = state.anchor_history[-10:]
 
             zone = self._find_zone(anchor)
+
+            # 调试：如果有车辆但找不到禁停区，输出位置信息（每30帧输出一次）
+            if zone is None and not hasattr(self, '_no_zone_logged_count'):
+                self._no_zone_logged_count = 0
             if zone is None:
+                self._no_zone_logged_count += 1
+                if self._no_zone_logged_count == 1 or self._no_zone_logged_count % 30 == 0:
+                    print(f"🚨 track_id={track_id} 不在任何禁停区内, 位置={anchor}, bbox={bbox}")
                 self._handle_zone_exit(state)
                 continue
+
+            # 重置计数器
+            if hasattr(self, '_no_zone_logged_count'):
+                self._no_zone_logged_count = 0
 
             zone_id = zone['zone_id']
             zone_name = zone.get('name', zone_id)
             threshold = float(zone.get('threshold_seconds', 30))
+
+            # 调试信息：车辆进入禁停区
+            if state.current_zone_id != zone_id:
+                print(f"🚨 track_id={track_id} 进入禁停区 [{zone_name}], 阈值={threshold}秒, 位置={anchor}")
 
             if state.current_zone_id != zone_id:
                 inherited = is_new_track and self._inherit_active_track_state(
@@ -113,6 +155,23 @@ class IllegalParkingMonitor:
 
             stay_time = (now - state.zone_entered_at).total_seconds() if state.zone_entered_at else 0
             is_stationary = self._is_stationary(state)
+
+            # 调试信息：监控停留状态（每秒输出一次）
+            if stay_time > 0 and len(state.anchor_history) >= self.min_history:
+                history = state.anchor_history
+                xs = [p[0] for p in history]
+                ys = [p[1] for p in history]
+                span_x = max(xs) - min(xs)
+                span_y = max(ys) - min(ys)
+                displacement = (span_x ** 2 + span_y ** 2) ** 0.5
+
+                # 使用整数部分判断，每秒输出一次
+                if int(stay_time) != int(stay_time - 0.1):  # 秒数变化时输出
+                    status_icon = "✅" if is_stationary else "❌"
+                    print(f"🚨 {status_icon} track_id={track_id} 在 [{zone_name}]: "
+                          f"停留 {stay_time:.1f}s / {threshold}s, "
+                          f"静止={is_stationary} (位移={displacement:.1f}px, 阈值≤{self.stationary_pixel_threshold}px), "
+                          f"历史={len(history)}帧")
 
             if stay_time >= threshold and is_stationary:
                 if not state.has_warned:
@@ -145,6 +204,7 @@ class IllegalParkingMonitor:
                         })
                         self._prune_recent_alerts(now)
                         events.append(candidate_event)
+                        print(f"🚨🚨🚨 违停告警触发！track_id={track_id}, 停留{stay_time:.1f}秒 ≥ {threshold}秒")
 
         self._age_unseen_tracks(seen_track_ids)
         return events
