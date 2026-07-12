@@ -46,6 +46,7 @@ class AnomalyDetector:
         filter_lane_markings=True,
         use_default_road_scope=False,
         max_background_vehicle_ratio=0.18,
+        announce=True,
         **_legacy_kwargs,
     ):
         """
@@ -124,7 +125,8 @@ class AnomalyDetector:
         self.anomaly_id_counter = 0
         self.tracked_anomalies = {}
 
-        print("道路异常检测器初始化完成：MOG2 + YOLO车辆掩膜 + 道路区域约束 + 时序判定")
+        if announce:
+            print("道路异常检测器初始化完成：MOG2 + YOLO车辆掩膜 + 道路区域约束 + 时序判定")
 
     def _create_subtractor(self):
         return cv2.createBackgroundSubtractorMOG2(

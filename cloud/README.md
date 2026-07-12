@@ -10,7 +10,7 @@ cloud/
 │   ├── vehicle_detection/  # 车辆检测 (YOLOv11)
 │   ├── plate_recognition/  # 车牌识别 (LPRNet)
 │   ├── vehicle_tracking/   # 车辆跟踪 (ByteTrack)
-│   └── anomaly_detection/  # 异常检测 (MOG2+车辆掩膜+道路约束+时序判定)
+│   └── anomaly_detection/  # 异常检测 (DINOv2参考特征+车辆掩膜+道路约束+时序判定)
 ├── stream_receiver/        # 视频流接收
 ├── business_logic/         # 业务逻辑
 └── api/                    # API接口
@@ -46,6 +46,12 @@ pip install -r requirements.txt
 - 训练脚本: `cloud/ai_models/anomaly_detection/train_drivable_segmenter.py`
 - 位置: `cloud/ai_models/anomaly_detection/sandbox_drivable_best.pt`
 
+### 5. DINOv2-S 道路异常特征模型
+- 模型名: `dinov2_vits14_reg`
+- 大小: 约 84MB
+- 首次启动由 PyTorch Hub 自动下载到 `.tools/model-cache`，后续启动复用缓存
+- 无网络时可设置 `ITS_ANOMALY_BACKEND=mog2` 回退旧后端
+
 ## 快速测试
 
 ### 测试车辆检测
@@ -68,8 +74,8 @@ python3 vehicle_tracker.py
 
 ### 测试异常检测
 ```bash
-cd cloud/ai_models/anomaly_detection
-python3 anomaly_detector.py
+python -m unittest cloud.stream_receiver.test_anomaly_processor
+python tools/evaluate_dinov2_reference.py --max-pairs 10
 ```
 
 ### 训练沙盘道路分割模型
@@ -102,11 +108,11 @@ events = anomaly_processor.process_frame(
 实时沙盘演示必须按以下顺序标定：
 
 1. 固定手机或摄像头，之后不要移动、变焦或切换横竖屏。
-2. 保持异物检测区内道路为空，点击“初始化背景”。
+2. 保持异物检测区内道路和车辆都为空，点击“初始化背景”。
 3. 等待至少 20 个有效背景帧并进入检测模式，再放置纸箱、石块等异物。
 4. 只要镜头位置、焦距或照明发生明显变化，就重新初始化背景。
 
-检测器默认关闭单帧颜色离群兜底，只上报背景学习后持续出现的前景；车辆框会按目标尺寸扩张后从异常区域中排除。高变化帧最多保留一个候选，正常帧最多保留三个候选，避免路面纹理和镜头抖动造成叠框刷屏。
+DINOv2检测器只上报相对正常模板持续出现的特征变化；车辆框会按目标尺寸扩张后从异常区域中排除。连续出现大面积全局变化时，系统会停止告警并返回背景学习，避免镜头移动造成叠框刷屏。需要临时回退旧方案时，设置 `ITS_ANOMALY_BACKEND=mog2`。
 
 ## 四大业务场景
 
@@ -125,7 +131,7 @@ events = anomaly_processor.process_frame(
 - 功能: 跟踪禁停区域车辆，计算停留时长
 - 输出: 车辆轨迹、停留时长、违停告警
 
-- 模型: 手动背景初始化 + MOG2背景建模 + YOLO车辆掩膜 + 道路区域约束 + 时序异常判定
+- 模型: DINOv2正常模板特征对比 + YOLO车辆掩膜 + 道路区域约束 + 时序异常判定
 - 功能: 固定机位下检测路面异常物体（掉落物、障碍物）
 - 输出: 异常物体位置、面积、告警状态
 
@@ -134,7 +140,7 @@ events = anomaly_processor.process_frame(
 - [x] YOLOv11车辆检测模块
 - [x] LPRNet车牌识别模块
 - [x] ByteTrack车辆跟踪模块
-- [x] MOG2+车辆掩膜+道路约束+时序异常检测模块
+- [x] DINOv2参考特征+车辆掩膜+道路约束+时序异常检测模块（保留MOG2回退）
 - [x] 道路异常检测支持前端手动“初始化背景 / 开始检测 / 重新标定”
 - [x] 视频流接收服务（从云端 MediaMTX 的 RTSP 地址拉流）
 - [x] 场景切换与共享车辆检测调度

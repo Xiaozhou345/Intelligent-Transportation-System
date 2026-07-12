@@ -19,6 +19,7 @@ if AI_MODELS_DIR not in sys.path:
 
 from anomaly_processor import RoadAnomalyProcessor
 from anomaly_detection.anomaly_detector import AnomalyDetector
+from anomaly_detection.dino_reference_detector import DinoReferenceDetector
 
 
 class RoadAnomalyProcessorTest(unittest.TestCase):
@@ -221,6 +222,118 @@ class RoadAnomalyProcessorTest(unittest.TestCase):
 
         processor.reset()
         self.assertEqual(0, processor.background_frames)
+
+
+class DinoReferenceDetectorTest(unittest.TestCase):
+    def setUp(self):
+        self.background = np.ones((240, 320, 3), dtype=np.uint8) * 100
+        self.road_mask = np.zeros((240, 320), dtype=np.uint8)
+        cv2.rectangle(self.road_mask, (20, 30), (300, 220), 255, -1)
+
+    @staticmethod
+    def fake_features(frame):
+        intensity = cv2.resize(
+            frame[:, :, 0].astype(np.float32) / 255.0,
+            (16, 12),
+            interpolation=cv2.INTER_AREA,
+        )
+        x_grid = np.tile(np.linspace(0.0, 1.0, 16, dtype=np.float32), (12, 1))
+        y_grid = np.tile(np.linspace(0.0, 1.0, 12, dtype=np.float32)[:, None], (1, 16))
+        return np.stack((intensity, 1.0 - intensity, x_grid, y_grid), axis=0)
+
+    def build_processor(self, **kwargs):
+        detector = DinoReferenceDetector(
+            feature_extractor=self.fake_features,
+            device="cpu",
+            local_radius=1,
+            heat_threshold=0.01,
+            pixel_threshold=0.01,
+            static_frames_threshold=3,
+            min_area=150,
+            min_component_extent=0.05,
+            component_merge_kernel=5,
+            use_default_road_scope=False,
+            **kwargs,
+        )
+        processor = RoadAnomalyProcessor(detector=detector)
+        for _ in range(4):
+            self.assertTrue(
+                processor.update_background(self.background, road_mask=self.road_mask)
+            )
+        return processor
+
+    def test_reference_object_is_confirmed(self):
+        processor = self.build_processor()
+        frame = self.background.copy()
+        cv2.rectangle(frame, (110, 100), (175, 165), (20, 20, 20), -1)
+
+        events = []
+        for _ in range(6):
+            events.extend(
+                processor.process_frame(
+                    device_id="mobile_001",
+                    frame=frame,
+                    road_mask=self.road_mask,
+                    vehicle_bboxes=[],
+                )
+            )
+
+        self.assertEqual(1, len(events))
+        self.assertEqual("warning", events[0]["status"])
+
+    def test_reference_vehicle_mask_suppresses_change(self):
+        processor = self.build_processor()
+        frame = self.background.copy()
+        bbox = [110, 100, 175, 165]
+        cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (20, 20, 20), -1)
+
+        events = []
+        for _ in range(6):
+            events.extend(
+                processor.process_frame(
+                    device_id="mobile_001",
+                    frame=frame,
+                    road_mask=self.road_mask,
+                    vehicle_bboxes=[bbox],
+                )
+            )
+
+        self.assertEqual([], events)
+        self.assertEqual([], processor.get_current_results())
+
+    def test_reference_global_change_requests_recalibration(self):
+        processor = self.build_processor(
+            camera_change_ratio=0.20,
+            camera_change_frames=2,
+        )
+        changed = np.ones_like(self.background) * 25
+
+        for _ in range(2):
+            processor.process_frame(
+                device_id="mobile_001",
+                frame=changed,
+                road_mask=self.road_mask,
+                vehicle_bboxes=[],
+            )
+
+        self.assertTrue(processor.detector.needs_recalibration)
+        self.assertEqual([], processor.get_current_results())
+
+    def test_reference_calibration_skips_vehicle_frames(self):
+        detector = DinoReferenceDetector(
+            feature_extractor=self.fake_features,
+            device="cpu",
+            use_default_road_scope=False,
+        )
+
+        learned = detector.update_background(
+            self.background,
+            road_mask=self.road_mask,
+            vehicle_bboxes=[[100, 80, 180, 170]],
+        )
+
+        self.assertFalse(learned)
+        self.assertEqual(0, detector.background_frames)
 
 
 if __name__ == "__main__":

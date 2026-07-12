@@ -103,6 +103,7 @@ class VideoProcessor:
         self.debug_output_dir = REPO_ROOT / "data" / "sandbox_anomaly" / "output"
 
         self.anomaly_processor = None
+        self.anomaly_backend = "disabled"
         self.vehicle_detector = None
         self.plate_detector = None
         self.plate_recognizer = None
@@ -195,7 +196,7 @@ class VideoProcessor:
                 drivable_model_path = None
                 print("沙盘道路分割模型未启用，将使用默认道路ROI")
 
-            detector = AnomalyDetector(
+            common_detector_kwargs = dict(
                 min_area=int(os.getenv("ITS_ANOMALY_MIN_AREA", "700")),
                 max_area=int(os.getenv("ITS_ANOMALY_MAX_AREA", "0")) or None,
                 max_area_ratio=float(os.getenv("ITS_ANOMALY_MAX_AREA_RATIO", "0.08")),
@@ -205,25 +206,72 @@ class VideoProcessor:
                 vehicle_mask_padding_ratio=float(os.getenv("ITS_VEHICLE_MASK_PADDING_RATIO", "0.10")),
                 road_roi=self._scale_polygon_for_base_size(self.runtime_defaults.get("anomaly_road_roi", [])),
                 road_scope_erode=int(os.getenv("ITS_ANOMALY_ROAD_EDGE_MARGIN", "6")),
-                warmup_frames=int(os.getenv("ITS_ANOMALY_WARMUP_FRAMES", "0")),
-                learning_rate=float(os.getenv("ITS_ANOMALY_LEARNING_RATE", "0")),
-                background_learning_rate=float(os.getenv("ITS_ANOMALY_BG_LEARNING_RATE", "-1")),
-                startup_static_check=os.getenv("ITS_STARTUP_STATIC_CHECK", "false").lower() == "true",
-                startup_static_kernel=int(os.getenv("ITS_STARTUP_STATIC_KERNEL", "55")),
-                startup_static_dilate=int(os.getenv("ITS_STARTUP_STATIC_DILATE", "7")),
-                road_surface_outlier_check=os.getenv("ITS_ROAD_SURFACE_OUTLIER", "false").lower() == "true",
-                outlier_min_area=int(os.getenv("ITS_OUTLIER_MIN_AREA", "700")),
-                outlier_color_distance=float(os.getenv("ITS_OUTLIER_COLOR_DISTANCE", "30")),
-                outlier_max_area=int(os.getenv("ITS_OUTLIER_MAX_AREA", "30000")),
                 min_road_overlap=float(os.getenv("ITS_ANOMALY_MIN_ROAD_OVERLAP", "0.85")),
                 min_component_extent=float(os.getenv("ITS_ANOMALY_MIN_EXTENT", "0.16")),
                 component_merge_kernel=int(os.getenv("ITS_ANOMALY_MERGE_KERNEL", "11")),
                 max_candidates=int(os.getenv("ITS_ANOMALY_MAX_CANDIDATES", "3")),
                 max_foreground_ratio=float(os.getenv("ITS_ANOMALY_MAX_FOREGROUND_RATIO", "0.16")),
-                filter_lane_markings=os.getenv("ITS_FILTER_LANE_MARKINGS", "true").lower() == "true",
                 use_default_road_scope=os.getenv("ITS_USE_DEFAULT_ROAD_SCOPE", "true").lower() == "true",
                 max_background_vehicle_ratio=float(os.getenv("ITS_BG_MAX_VEHICLE_RATIO", "0.18")),
             )
+
+            requested_backend = os.getenv(
+                "ITS_ANOMALY_BACKEND",
+                "dino_reference",
+            ).strip().lower()
+            if requested_backend in {"dino", "dinov2", "dino_reference"}:
+                try:
+                    from anomaly_detection.dino_reference_detector import DinoReferenceDetector
+
+                    dino_detector_kwargs = dict(common_detector_kwargs)
+                    dino_detector_kwargs["max_candidates"] = int(
+                        os.getenv("ITS_DINO_MAX_CANDIDATES", "1")
+                    )
+                    detector = DinoReferenceDetector(
+                        model_name=os.getenv("ITS_DINO_MODEL", "dinov2_vits14_reg"),
+                        image_size=int(os.getenv("ITS_DINO_IMAGE_SIZE", "518")),
+                        local_radius=int(os.getenv("ITS_DINO_LOCAL_RADIUS", "1")),
+                        heat_threshold=float(os.getenv("ITS_DINO_HEAT_THRESHOLD", "0.18")),
+                        pixel_threshold=float(os.getenv("ITS_DINO_PIXEL_THRESHOLD", "0.14")),
+                        threshold_quantile=float(os.getenv("ITS_DINO_THRESHOLD_QUANTILE", "0.99")),
+                        threshold_margin=float(os.getenv("ITS_DINO_THRESHOLD_MARGIN", "1.25")),
+                        top_fraction=float(os.getenv("ITS_DINO_TOP_FRACTION", "0.005")),
+                        camera_change_ratio=float(os.getenv("ITS_DINO_CAMERA_CHANGE_RATIO", "0.30")),
+                        camera_change_frames=int(os.getenv("ITS_DINO_CAMERA_CHANGE_FRAMES", "3")),
+                        allow_background_vehicles=os.getenv(
+                            "ITS_DINO_ALLOW_BG_VEHICLES",
+                            "false",
+                        ).lower() == "true",
+                        min_thin_side=int(os.getenv("ITS_DINO_MIN_THIN_SIDE", "18")),
+                        max_thin_aspect=float(os.getenv("ITS_DINO_MAX_THIN_ASPECT", "4.0")),
+                        filter_lane_markings=False,
+                        **dino_detector_kwargs,
+                    )
+                    self.anomaly_backend = "dino_reference"
+                    print("✅ 道路异常后端: DINOv2固定机位参考特征")
+                except Exception as dino_exc:
+                    print(f"⚠️  DINOv2异常后端加载失败，回退MOG2: {dino_exc}")
+                    requested_backend = "mog2"
+
+            if requested_backend == "mog2":
+                detector = AnomalyDetector(
+                    warmup_frames=int(os.getenv("ITS_ANOMALY_WARMUP_FRAMES", "0")),
+                    learning_rate=float(os.getenv("ITS_ANOMALY_LEARNING_RATE", "0")),
+                    background_learning_rate=float(os.getenv("ITS_ANOMALY_BG_LEARNING_RATE", "-1")),
+                    startup_static_check=os.getenv("ITS_STARTUP_STATIC_CHECK", "false").lower() == "true",
+                    startup_static_kernel=int(os.getenv("ITS_STARTUP_STATIC_KERNEL", "55")),
+                    startup_static_dilate=int(os.getenv("ITS_STARTUP_STATIC_DILATE", "7")),
+                    road_surface_outlier_check=os.getenv("ITS_ROAD_SURFACE_OUTLIER", "false").lower() == "true",
+                    outlier_min_area=int(os.getenv("ITS_OUTLIER_MIN_AREA", "700")),
+                    outlier_color_distance=float(os.getenv("ITS_OUTLIER_COLOR_DISTANCE", "30")),
+                    outlier_max_area=int(os.getenv("ITS_OUTLIER_MAX_AREA", "30000")),
+                    filter_lane_markings=os.getenv("ITS_FILTER_LANE_MARKINGS", "true").lower() == "true",
+                    **common_detector_kwargs,
+                )
+                self.anomaly_backend = "mog2"
+
+            if self.anomaly_backend == "disabled":
+                raise ValueError(f"不支持的道路异常后端: {requested_backend}")
             self.anomaly_processor = RoadAnomalyProcessor(
                 detector=detector,
                 drivable_model_path=drivable_model_path,
@@ -1011,10 +1059,17 @@ class VideoProcessor:
             if device_id in self.sent_vehicles:
                 self.sent_vehicles[device_id].clear()
 
-            # 5. 重置帧计数
+            # 5. 流重连后固定机位参考可能已失效，重新标定道路背景
+            if self.anomaly_processor:
+                self.anomaly_processor.reset()
+                state["anomaly_mode"] = "background_learning"
+                state["anomaly_background_frames"] = 0
+                state["anomaly_background_skipped_frames"] = 0
+
+            # 6. 重置帧计数
             state["processed_frames"] = 0
 
-            # 6. 清除重连标记
+            # 7. 清除重连标记
             state["stream_reconnected"] = False
 
             print(f"   ✅ 已清空跟踪器、违停监控、车牌/车辆去重缓存")
@@ -1330,8 +1385,7 @@ class VideoProcessor:
                     vehicle_bboxes=vehicle_bboxes,
                 )
 
-                # 使用anomaly_processor内部的真实计数器，而非video_processor的统计
-                # 这确保统计与实际MOG2背景模型的帧数一致
+                # 使用anomaly_processor内部的真实计数器，确保统计与实际检测后端一致
                 actual_background_frames = self.anomaly_processor.background_frames
 
                 if learned:
@@ -1395,14 +1449,35 @@ class VideoProcessor:
                     timestamp=timestamp,
                     road_mask=road_mask,
                 )
-                anomaly_overlay_events = self.anomaly_processor.get_current_results()
-                for event in anomaly_events:
-                    self._send_result(event)
-                    print(
-                        f"道路异常告警: bbox={event.get('bbox')} "
-                        f"area={event.get('data', {}).get('area')} "
-                        f"duration={event.get('duration_frames')}"
-                    )
+                detector = self.anomaly_processor.detector
+                if getattr(detector, "needs_recalibration", False):
+                    self.anomaly_processor.reset()
+                    state["anomaly_mode"] = "background_learning"
+                    state["anomaly_background_frames"] = 0
+                    state["anomaly_background_skipped_frames"] = 0
+                    anomaly_events = []
+                    anomaly_overlay_events = []
+                    self._send_result({
+                        "event_type": "anomaly_mode_updated",
+                        "timestamp": timestamp,
+                        "device_id": device_id,
+                        "status": "warning",
+                        "data": {
+                            "mode": "background_learning",
+                            "active_scene": "road_anomaly",
+                            "message": "camera_changed_recalibration_started",
+                        },
+                    })
+                    print("检测到镜头位置整体变化，已停止告警并重新标定道路背景")
+                else:
+                    anomaly_overlay_events = self.anomaly_processor.get_current_results()
+                    for event in anomaly_events:
+                        self._send_result(event)
+                        print(
+                            f"道路异常告警: bbox={event.get('bbox')} "
+                            f"area={event.get('data', {}).get('area')} "
+                            f"duration={event.get('duration_frames')}"
+                        )
 
                 if frame_count % 90 == 0:
                     print(
@@ -1800,6 +1875,23 @@ class VideoProcessor:
         print("道路异常背景已重置，已进入背景学习模式")
         return {"status": "success", "mode": "background_learning", "background_frames": 0, "skipped_frames": 0}
 
+    def _anomaly_backend_status(self):
+        payload = {"backend": self.anomaly_backend}
+        if not self.anomaly_processor:
+            return payload
+        detector = self.anomaly_processor.detector
+        for field in (
+            "heat_threshold",
+            "pixel_threshold",
+            "last_heat_score",
+            "last_foreground_ratio",
+            "needs_recalibration",
+        ):
+            if hasattr(detector, field):
+                value = getattr(detector, field)
+                payload[field] = round(value, 5) if isinstance(value, float) else value
+        return payload
+
     def get_anomaly_status(self, device_id=None):
         if device_id and device_id in self.runtime_state:
             state = self.runtime_state[device_id]
@@ -1812,6 +1904,7 @@ class VideoProcessor:
                 "min_background_frames": int(self.runtime_defaults.get("anomaly_min_background_frames", 8)),
                 "active_scene": state.get("active_scene"),
                 "enabled": self.anomaly_processor is not None,
+                **self._anomaly_backend_status(),
             }
 
         # 单设备演示未显式传 device_id 时，优先返回真实运行状态，避免
@@ -1827,6 +1920,7 @@ class VideoProcessor:
                 "min_background_frames": int(self.runtime_defaults.get("anomaly_min_background_frames", 8)),
                 "active_scene": state.get("active_scene"),
                 "enabled": self.anomaly_processor is not None,
+                **self._anomaly_backend_status(),
             }
 
         # 使用anomaly_processor内部的真实计数器，确保准确性
@@ -1843,6 +1937,7 @@ class VideoProcessor:
             "min_background_frames": int(self.runtime_defaults.get("anomaly_min_background_frames", 8)),
             "active_scene": self.runtime_defaults.get("active_scene"),
             "enabled": self.anomaly_processor is not None,
+            **self._anomaly_backend_status(),
         }
 
     def _target_states(self, device_id=None):

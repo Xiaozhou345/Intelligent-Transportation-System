@@ -2,8 +2,8 @@
 Road anomaly processor for cloud model scheduling.
 
 The scheduler owns the video stream and passes frames into this module. The
-detector assumes a fixed camera during detection and uses MOG2 background
-subtraction, YOLO vehicle masks, optional road-area masks, and temporal
+detector assumes a fixed camera during detection and uses a pluggable
+foreground backend, YOLO vehicle masks, optional road-area masks, and temporal
 confirmation.
 """
 import os
@@ -21,7 +21,7 @@ from anomaly_detection.drivable_segmenter import DrivableAreaSegmenter
 
 
 class RoadAnomalyProcessor:
-    """Formats MOG2 road anomaly detections as cloud/front-end events."""
+    """Formats road anomaly detections as cloud/front-end events."""
 
     def __init__(
         self,
@@ -69,7 +69,7 @@ class RoadAnomalyProcessor:
         print("道路异常处理器初始化完成")
 
     def update_background(self, frame, road_mask=None, vehicle_bboxes=None):
-        """Feed clean static-camera frames into the background model."""
+        """Feed clean static-camera frames into the active reference model."""
         self.current_results = []
         if road_mask is None and self.drivable_segmenter:
             road_mask = self.drivable_segmenter.predict_mask(frame)

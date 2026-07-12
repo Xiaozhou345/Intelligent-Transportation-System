@@ -1,8 +1,8 @@
 # 云端AI分析引擎依赖包
 
 # 深度学习框架
-torch>=1.8.0
-torchvision>=0.9.0
+torch>=2.0.0
+torchvision>=0.15.0
 
 # 计算机视觉
 opencv-python>=4.6.0

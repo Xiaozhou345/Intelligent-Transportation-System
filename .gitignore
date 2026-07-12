@@ -58,6 +58,7 @@ data/sandbox_anomaly/**/*.png
 data/sandbox_anomaly/**/*.bmp
 data/sandbox_anomaly/**/*.webp
 data/sandbox_anomaly/output/
+data/sandbox_anomaly/output*/
 
 # Logs
 *.log
