@@ -67,6 +67,7 @@ class RoadAnomalyProcessorTest(unittest.TestCase):
         self.assertEqual("warning", event["status"])
         self.assertEqual("lane_1", event["affected_lane"])
         self.assertGreaterEqual(event["duration_frames"], 3)
+        self.assertEqual(1, len(processor.get_current_results()))
 
     def test_vehicle_mask_does_not_become_anomaly(self):
         processor = self.build_processor()

@@ -142,6 +142,7 @@ class Track:
         # 轨迹历史
         self.history = deque(maxlen=30)
         self.history.append(bbox)
+        self.last_detection_bbox = [float(value) for value in bbox]
 
     @staticmethod
     def tlwh_to_xyah(tlwh):
@@ -177,6 +178,7 @@ class Track:
             self.mean, self.covariance, self.tlwh_to_xyah(new_tlwh))
         self.score = new_score
         self.history.append(new_bbox)
+        self.last_detection_bbox = [float(value) for value in new_bbox]
 
     def get_bbox(self):
         """获取当前bbox [x1, y1, x2, y2]"""
@@ -190,6 +192,10 @@ class Track:
 
         bbox = [tlwh[0], tlwh[1], tlwh[0] + tlwh[2], tlwh[1] + tlwh[3]]
         return bbox
+
+    def get_detection_bbox(self):
+        """返回最新检测框，避免展示层受卡尔曼平滑滞后影响。"""
+        return list(self.last_detection_bbox)
 
 
 class VehicleTracker:
@@ -273,8 +279,14 @@ class VehicleTracker:
                 continue
             valid_detections.append(det)
 
-        # 预测所有跟踪目标的位置
+        # 清理超时轨迹，并预测活跃/短暂丢失目标的位置。
+        self.lost_tracks = [
+            track for track in self.lost_tracks
+            if self.frame_id - track.frame_id <= self.max_time_lost
+        ]
         for track in self.tracked_tracks:
+            track.predict()
+        for track in self.lost_tracks:
             track.predict()
 
         # 分离高低置信度检测
@@ -284,21 +296,28 @@ class VehicleTracker:
         # 匹配高置信度检测与跟踪
         unmatched_tracks, unmatched_dets = self._match(self.tracked_tracks, high_det)
 
-        # 更新匹配的跟踪
-        matched_tracks = [t for t in self.tracked_tracks if t not in unmatched_tracks]
-
         # 未匹配的跟踪尝试与低置信度检测匹配
-        second_unmatched_tracks, second_unmatched_dets = self._match(unmatched_tracks, low_det)
+        second_unmatched_tracks, _ = self._match(unmatched_tracks, low_det)
+
+        # 优先用未匹配的高置信度检测恢复短暂丢失的 ID，
+        # 否则偶发的一帧漏检会让违停计时从头开始。
+        recoverable_lost = list(self.lost_tracks)
+        still_lost, unmatched_dets = self._match(recoverable_lost, unmatched_dets)
+        reactivated_tracks = [
+            track for track in recoverable_lost if track not in still_lost
+        ]
+        for track in reactivated_tracks:
+            if track in self.lost_tracks:
+                self.lost_tracks.remove(track)
+            if track not in self.tracked_tracks:
+                self.tracked_tracks.append(track)
 
         # 标记丢失的跟踪
         for track in second_unmatched_tracks:
-            if track.time_since_update > self.max_time_lost:
+            if track not in self.lost_tracks:
+                self.lost_tracks.append(track)
+            if track in self.tracked_tracks:
                 self.tracked_tracks.remove(track)
-            else:
-                if track not in self.lost_tracks:
-                    self.lost_tracks.append(track)
-                if track in self.tracked_tracks:
-                    self.tracked_tracks.remove(track)
 
         # 创建新跟踪
         for det in unmatched_dets:
@@ -312,7 +331,9 @@ class VehicleTracker:
             if track.is_activated:
                 results.append({
                     'track_id': track.track_id,
-                    'bbox': track.get_bbox(),
+                    # 展示与业务规则使用当前检测框，保证画框跟上当前画面。
+                    'bbox': track.get_detection_bbox(),
+                    'smoothed_bbox': track.get_bbox(),
                     'confidence': track.score,
                     'class_name': getattr(track, 'class_name', 'vehicle')
                 })
@@ -322,7 +343,9 @@ class VehicleTracker:
     def _match(self, tracks, detections):
         """匹配跟踪和检测"""
         if len(tracks) == 0 or len(detections) == 0:
-            return tracks, detections
+            # Return snapshots: callers may append reactivated tracks to the
+            # original active list later in the same update cycle.
+            return list(tracks), list(detections)
 
         # 计算IoU矩阵
         iou_matrix = np.zeros((len(tracks), len(detections)))
@@ -342,6 +365,9 @@ class VehicleTracker:
 
             i, j = np.unravel_index(iou_matrix.argmax(), iou_matrix.shape)
             tracks[i].update(detections[j]['bbox'], detections[j]['confidence'], self.frame_id)
+            tracks[i].class_name = detections[j].get(
+                'class_name', getattr(tracks[i], 'class_name', 'vehicle')
+            )
             matched_tracks.append(tracks[i])
             matched_dets.append(detections[j])
 

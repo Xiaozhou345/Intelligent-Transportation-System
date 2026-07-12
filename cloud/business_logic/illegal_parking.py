@@ -42,6 +42,9 @@ class IllegalParkingMonitor:
         alert_dedupe_seconds: float = 12,
         alert_dedupe_iou: float = 0.5,
         alert_dedupe_center_distance: float = 80,
+        handoff_max_seconds: float = 3,
+        handoff_iou: float = 0.15,
+        handoff_center_distance: float = 120,
     ):
         self.zones = zones or []
         self.stationary_pixel_threshold = stationary_pixel_threshold
@@ -50,6 +53,9 @@ class IllegalParkingMonitor:
         self.alert_dedupe_seconds = alert_dedupe_seconds
         self.alert_dedupe_iou = alert_dedupe_iou
         self.alert_dedupe_center_distance = alert_dedupe_center_distance
+        self.handoff_max_seconds = handoff_max_seconds
+        self.handoff_iou = handoff_iou
+        self.handoff_center_distance = handoff_center_distance
         self.track_states: Dict[int, TrackParkingState] = {}
         self.recent_alerts: List[dict] = []
 
@@ -65,7 +71,8 @@ class IllegalParkingMonitor:
             seen_track_ids.add(track_id)
 
             state = self.track_states.get(track_id)
-            if state is None:
+            is_new_track = state is None
+            if is_new_track:
                 state = TrackParkingState(
                     track_id=track_id,
                     first_seen_at=now,
@@ -91,12 +98,16 @@ class IllegalParkingMonitor:
             threshold = float(zone.get('threshold_seconds', 30))
 
             if state.current_zone_id != zone_id:
-                state.current_zone_id = zone_id
-                state.current_zone_name = zone_name
-                state.current_threshold = threshold
-                state.zone_entered_at = now
-                state.has_warned = False
-                state.last_warned_at = None
+                inherited = is_new_track and self._inherit_active_track_state(
+                    state, zone_id, zone_name, threshold, bbox, now
+                )
+                if not inherited:
+                    state.current_zone_id = zone_id
+                    state.current_zone_name = zone_name
+                    state.current_threshold = threshold
+                    state.zone_entered_at = now
+                    state.has_warned = False
+                    state.last_warned_at = None
 
             self._inherit_recent_alert_state(state, zone_id, bbox, now)
 
@@ -137,6 +148,32 @@ class IllegalParkingMonitor:
 
         self._age_unseen_tracks(seen_track_ids)
         return events
+
+    def get_active_statuses(self, timestamp_iso: Optional[str] = None) -> List[dict]:
+        """Return current in-zone progress so the UI can explain why an alert has or has not fired."""
+        now = self._parse_iso_time(timestamp_iso) if timestamp_iso else datetime.now()
+        statuses = []
+        for state in self.track_states.values():
+            if (
+                state.current_zone_id is None
+                or state.zone_entered_at is None
+                or state.missed_frames > 0
+            ):
+                continue
+
+            stay_time = max(0.0, (now - state.zone_entered_at).total_seconds())
+            statuses.append({
+                'track_id': state.track_id,
+                'bbox': [int(v) for v in state.last_bbox],
+                'stay_time': round(stay_time, 1),
+                'threshold': float(state.current_threshold),
+                'zone_id': state.current_zone_id,
+                'zone_name': state.current_zone_name,
+                'is_stationary': self._is_stationary(state),
+                'has_warned': state.has_warned,
+                'status': 'warning' if state.has_warned else 'monitoring',
+            })
+        return statuses
 
     def _age_unseen_tracks(self, seen_track_ids: set):
         stale_track_ids = []
@@ -220,6 +257,52 @@ class IllegalParkingMonitor:
                 if state.zone_entered_at is None or state.zone_entered_at > item['timestamp']:
                     state.zone_entered_at = item['timestamp']
                 return
+
+    def _inherit_active_track_state(
+        self,
+        state: TrackParkingState,
+        zone_id: str,
+        zone_name: str,
+        threshold: float,
+        bbox: BBox,
+        now: datetime,
+    ) -> bool:
+        """Carry the parking timer across a short tracker-ID change before an alert is emitted."""
+        center = self._bottom_center(bbox)
+        best_match = None
+        best_score = -1.0
+
+        for other_track_id, other in self.track_states.items():
+            if other_track_id == state.track_id or other.current_zone_id != zone_id:
+                continue
+
+            unseen_seconds = (now - other.last_seen_at).total_seconds()
+            if unseen_seconds <= 0 or unseen_seconds > self.handoff_max_seconds:
+                continue
+
+            iou = self._bbox_iou(bbox, other.last_bbox)
+            distance = self._center_distance(center, self._bottom_center(other.last_bbox))
+            if iou < self.handoff_iou and distance > self.handoff_center_distance:
+                continue
+
+            score = iou + max(0.0, 1.0 - distance / max(1.0, self.handoff_center_distance))
+            if score > best_score:
+                best_score = score
+                best_match = other
+
+        if best_match is None:
+            return False
+
+        state.first_seen_at = min(state.first_seen_at, best_match.first_seen_at)
+        state.current_zone_id = zone_id
+        state.current_zone_name = zone_name
+        state.current_threshold = threshold
+        state.zone_entered_at = best_match.zone_entered_at or now
+        state.has_warned = best_match.has_warned
+        state.last_warned_at = best_match.last_warned_at
+        state.anchor_history = (best_match.anchor_history + state.anchor_history)[-10:]
+        self.track_states.pop(best_match.track_id, None)
+        return True
 
     def _is_duplicate_alert(self, event: dict, now: datetime) -> bool:
         self._prune_recent_alerts(now)

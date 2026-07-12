@@ -331,18 +331,38 @@ const buildOverlayBoxes = (overlay) => {
         fillColor
       }))
   }
+  const parkingStatuses = (Array.isArray(data.parking_statuses) ? data.parking_statuses : [])
+    .filter(item => Array.isArray(item.bbox) && item.bbox.length === 4)
+    .map(item => ({
+      x1: item.bbox[0],
+      y1: item.bbox[1],
+      x2: item.bbox[2],
+      y2: item.bbox[3],
+      label: item.label || (item.has_warned ? '已违停' : '违停计时中'),
+      color: item.has_warned ? '#b91c1c' : (item.is_stationary ? '#f97316' : '#2563eb'),
+      trackId: item.track_id
+    }))
+  const activeParkingTrackIds = new Set(parkingStatuses.map(item => item.trackId))
+  const parkingAlerts = (Array.isArray(data.illegal_parking) ? data.illegal_parking : [])
+    .filter(item => !activeParkingTrackIds.has(item.track_id))
 
   return [
     ...normalizePolygons(data.no_parking_zones, '#f97316', 'rgba(249, 115, 22, 0.16)', 'no parking'),
+    ...normalizePolygons(data.anomaly_road_roi, '#16a34a', 'rgba(22, 163, 74, 0.10)', '异物检测区'),
     ...normalize(data.vehicles, '#ef4444', 'vehicle'),
     ...normalize(data.plates, '#f59e0b', 'plate'),
-    ...normalize(data.illegal_parking, '#b91c1c', 'illegal'),
+    ...parkingStatuses,
+    ...normalize(parkingAlerts, '#b91c1c', 'illegal'),
     ...normalize(data.road_anomalies, '#a855f7', 'anomaly')
   ]
 }
 
 const handleVideoOverlay = (data) => {
   latestVideoOverlay.value = data
+  const analysisLatency = Number(data.analysis_latency_ms)
+  if (Number.isFinite(analysisLatency)) {
+    latestLatency.value = Math.max(0, Math.round(analysisLatency))
+  }
   if (!videoPlayerRef.value) return
   const sourceSize = data.stream_size?.width && data.stream_size?.height
     ? { width: data.stream_size.width, height: data.stream_size.height }

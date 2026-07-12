@@ -167,7 +167,7 @@ watch(() => props.records.length, (newLen, oldLen) => {
     <div class="alarm-header">
       <div>
         <h3>道路异常告警</h3>
-        <p>先初始化干净道路背景，再放置异物并开始检测</p>
+        <p>初始化时保持道路干净，背景帧达标后会自动进入检测</p>
       </div>
       <ElTag :type="getModeType(modeStatus.mode)" size="small">
         {{ getModeText(modeStatus.mode) }}

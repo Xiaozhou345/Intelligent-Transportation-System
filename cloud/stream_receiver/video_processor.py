@@ -90,10 +90,14 @@ class VideoProcessor:
         self.active_streams = {}  # {device_id: thread}
         self.stop_flags = {}  # {device_id: stop_event}
 
-        self.frame_skip = int(os.getenv("ITS_FRAME_SKIP", "3"))
+        self.frame_skip = int(os.getenv("ITS_FRAME_SKIP", "1"))
         self.enable_mock_fallback = os.getenv("ITS_ENABLE_MOCK_FALLBACK", "true").lower() == "true"
         self.disable_vehicle_mask = os.getenv("ITS_DISABLE_VEHICLE_MASK", "false").lower() == "true"
-        self.vehicle_mask_min_conf = float(os.getenv("ITS_VEHICLE_MASK_MIN_CONF", "0.65"))
+        # The sandbox vehicle model can label small cardboard obstacles as
+        # vehicles around 0.65-0.70 confidence. Keep the normal detector
+        # threshold independent, but require stronger evidence before an
+        # object is excluded from road-anomaly analysis.
+        self.vehicle_mask_min_conf = float(os.getenv("ITS_VEHICLE_MASK_MIN_CONF", "0.75"))
         self.emit_vehicle_events = os.getenv("ITS_EMIT_VEHICLE_EVENTS", "false").lower() == "true"
         self.disable_drivable_segmenter = os.getenv("ITS_DISABLE_DRIVABLE_SEGMENTER", "true").lower() == "true"
         self.debug_output_dir = REPO_ROOT / "data" / "sandbox_anomaly" / "output"
@@ -107,7 +111,15 @@ class VideoProcessor:
 
         # 性能优化参数
         self.plate_recognition_skip = int(os.getenv("ITS_PLATE_RECOGNITION_SKIP", "3"))
-        self.overlay_push_skip = int(os.getenv("ITS_OVERLAY_PUSH_SKIP", "2"))
+        self.overlay_push_skip = int(os.getenv("ITS_OVERLAY_PUSH_SKIP", "1"))
+        self.plate_in_vehicle_scene = os.getenv(
+            "ITS_PLATE_IN_VEHICLE_SCENE", "false"
+        ).lower() == "true"
+        self.frame_log_every = max(1, int(os.getenv("ITS_FRAME_LOG_EVERY", "30")))
+        self.perf_log_every = max(1, int(os.getenv("ITS_PERF_LOG_EVERY", "30")))
+        self.anomaly_auto_start = os.getenv(
+            "ITS_ANOMALY_AUTO_START", "true"
+        ).lower() == "true"
 
         # 车牌号缓存：{device_id: [(bbox, plate_number, timestamp), ...]}
         self.plate_cache: Dict[str, List[tuple]] = {}
@@ -179,7 +191,7 @@ class VideoProcessor:
                 print("沙盘道路分割模型未启用，将使用默认道路ROI")
 
             detector = AnomalyDetector(
-                min_area=int(os.getenv("ITS_ANOMALY_MIN_AREA", "900")),
+                min_area=int(os.getenv("ITS_ANOMALY_MIN_AREA", "300")),
                 max_area=int(os.getenv("ITS_ANOMALY_MAX_AREA", "0")) or None,
                 max_area_ratio=float(os.getenv("ITS_ANOMALY_MAX_AREA_RATIO", "0.08")),
                 static_frames_threshold=int(os.getenv("ITS_ANOMALY_STATIC_FRAMES", "3")),
@@ -190,10 +202,10 @@ class VideoProcessor:
                 startup_static_kernel=int(os.getenv("ITS_STARTUP_STATIC_KERNEL", "55")),
                 startup_static_dilate=int(os.getenv("ITS_STARTUP_STATIC_DILATE", "7")),
                 road_surface_outlier_check=os.getenv("ITS_ROAD_SURFACE_OUTLIER", "true").lower() == "true",
-                outlier_min_area=int(os.getenv("ITS_OUTLIER_MIN_AREA", "250")),
-                outlier_color_distance=float(os.getenv("ITS_OUTLIER_COLOR_DISTANCE", "24")),
+                outlier_min_area=int(os.getenv("ITS_OUTLIER_MIN_AREA", "180")),
+                outlier_color_distance=float(os.getenv("ITS_OUTLIER_COLOR_DISTANCE", "20")),
                 outlier_max_area=int(os.getenv("ITS_OUTLIER_MAX_AREA", "30000")),
-                min_road_overlap=float(os.getenv("ITS_ANOMALY_MIN_ROAD_OVERLAP", "0.65")),
+                min_road_overlap=float(os.getenv("ITS_ANOMALY_MIN_ROAD_OVERLAP", "0.85")),
                 filter_lane_markings=os.getenv("ITS_FILTER_LANE_MARKINGS", "true").lower() == "true",
                 use_default_road_scope=os.getenv("ITS_USE_DEFAULT_ROAD_SCOPE", "true").lower() == "true",
                 max_background_vehicle_ratio=float(os.getenv("ITS_BG_MAX_VEHICLE_RATIO", "0.18")),
@@ -380,6 +392,37 @@ class VideoProcessor:
             else:
                 scaled.append([int(round(x)), int(round(y))])
         return scaled
+
+    def _build_effective_road_mask(self, frame, state):
+        """Build the exact road mask used by calibration and anomaly detection."""
+        height, width = frame.shape[:2]
+        manual_mask = None
+        polygon = state.get("anomaly_road_roi") or []
+        if len(polygon) >= 3:
+            manual_mask = np.zeros((height, width), dtype=np.uint8)
+            cv2.fillPoly(manual_mask, [np.asarray(polygon, dtype=np.int32)], 255)
+
+        predicted_mask = None
+        if self.anomaly_processor:
+            predicted_mask = self.anomaly_processor.predict_road_mask(frame)
+        if predicted_mask is not None:
+            if predicted_mask.shape[:2] != (height, width):
+                predicted_mask = cv2.resize(
+                    predicted_mask, (width, height), interpolation=cv2.INTER_NEAREST
+                )
+            predicted_mask = np.where(predicted_mask > 0, 255, 0).astype(np.uint8)
+            coverage = cv2.countNonZero(predicted_mask) / float(max(1, width * height))
+            # An empty or nearly full segmentation is not a usable road scope.
+            if coverage < 0.03 or coverage > 0.90:
+                predicted_mask = None
+
+        if manual_mask is not None and predicted_mask is not None:
+            combined = cv2.bitwise_and(manual_mask, predicted_mask)
+            manual_area = max(1, cv2.countNonZero(manual_mask))
+            if cv2.countNonZero(combined) / float(manual_area) >= 0.20:
+                return combined
+            return manual_mask
+        return manual_mask if manual_mask is not None else predicted_mask
 
     def _scale_polygon_for_base_size(self, polygon):
         """Scale normalized ROI for detector construction before first frame.
@@ -927,7 +970,10 @@ class VideoProcessor:
         # ============ 步骤4：车牌检测+识别 ============
         plate_events = []
         plates_refreshed = False
-        plate_scene_enabled = active_scene in {'vehicle_detection', 'plate_recognition'}
+        plate_scene_enabled = (
+            active_scene == 'plate_recognition'
+            or (active_scene == 'vehicle_detection' and self.plate_in_vehicle_scene)
+        )
         if (
             plate_scene_enabled
             and self.plate_detector
@@ -1110,6 +1156,7 @@ class VideoProcessor:
         # ============ 步骤6：违停监控 ============
         step_start = time.time()
         parking_events = state["parking_monitor"].update(device_id, tracked_vehicles, timestamp)
+        parking_statuses = state["parking_monitor"].get_active_statuses(timestamp)
         if active_scene == 'illegal_parking':
             for event in parking_events:
                 self._send_result(event)
@@ -1121,11 +1168,12 @@ class VideoProcessor:
 
         # ============ 步骤7：道路异常检测 ============
         anomaly_events = []
+        anomaly_overlay_events = []
         if self.anomaly_processor and active_scene == 'road_anomaly':
             step_start = time.time()
             anomaly_mode = state.get("anomaly_mode", "detecting")
+            road_mask = self._build_effective_road_mask(frame, state)
             if anomaly_mode == "background_learning":
-                road_mask = self.anomaly_processor.predict_road_mask(frame)
                 learned = self.anomaly_processor.update_background(
                     frame,
                     road_mask=road_mask,
@@ -1165,13 +1213,39 @@ class VideoProcessor:
                         f"frames={actual_background_frames} skipped={skipped_frames} "
                         f"vehicle_masks={len(vehicle_bboxes)}"
                     )
+
+                min_background_frames = int(
+                    self.runtime_defaults.get("anomaly_min_background_frames", 8)
+                )
+                if self.anomaly_auto_start and actual_background_frames >= min_background_frames:
+                    state["anomaly_mode"] = "detecting"
+                    self.runtime_defaults["anomaly_mode"] = "detecting"
+                    self._send_result({
+                        "event_type": "anomaly_mode_updated",
+                        "timestamp": timestamp,
+                        "device_id": device_id,
+                        "status": "success",
+                        "data": {
+                            "mode": "detecting",
+                            "active_scene": "road_anomaly",
+                            "background_frames": actual_background_frames,
+                            "min_background_frames": min_background_frames,
+                            "message": "background_ready",
+                        },
+                    })
+                    print(
+                        f"道路异常背景学习完成，自动进入检测模式: "
+                        f"{actual_background_frames}/{min_background_frames}"
+                    )
             else:
                 anomaly_events = self.anomaly_processor.process_frame(
                     device_id=device_id,
                     frame=frame,
                     vehicle_bboxes=vehicle_bboxes,
                     timestamp=timestamp,
+                    road_mask=road_mask,
                 )
+                anomaly_overlay_events = self.anomaly_processor.get_current_results()
                 for event in anomaly_events:
                     self._send_result(event)
                     print(
@@ -1186,7 +1260,7 @@ class VideoProcessor:
                         f"车辆掩膜 {len(vehicle_bboxes)} 个，告警 {len(anomaly_events)} 条"
                     )
                     self._save_debug_frame(frame, frame_count, vehicle_bboxes, anomaly_events)
-                    self._save_road_mask_debug(frame, frame_count)
+                    self._save_road_mask_debug(road_mask, frame_count)
 
             perf_timings['road_anomaly'] = (time.time() - step_start) * 1000
         else:
@@ -1202,10 +1276,17 @@ class VideoProcessor:
             active_scene=active_scene,
             tracked_vehicles=tracked_vehicles,
             parking_events=parking_events,
-            anomaly_events=anomaly_events,
+            parking_statuses=parking_statuses,
+            anomaly_events=anomaly_overlay_events,
             plate_events=plate_events,
         )
         perf_timings['build_overlay'] = (time.time() - step_start) * 1000
+        overlay['analysis_latency_ms'] = round(
+            float(state.get("capture_to_analysis_ms", 0))
+            + (time.time() - frame_start_time) * 1000,
+            1,
+        )
+        overlay['sequence'] = int(frame_count)
 
         # ============ 步骤9：推送overlay ============
         step_start = time.time()
@@ -1222,8 +1303,8 @@ class VideoProcessor:
         total_time = (time.time() - frame_start_time) * 1000
         perf_timings['total'] = total_time
 
-        # 每10个处理帧输出一次详细性能报告
-        if state["processed_frames"] % 10 == 0:
+        # 限流性能日志，避免控制台 I/O 拖慢实时推理。
+        if state["processed_frames"] % self.perf_log_every == 0:
             print(f"\n{'='*80}")
             print(f"🔍 性能监控报告 - 帧 {frame_count} (处理帧 {state['processed_frames']})")
             print(f"{'='*80}")
@@ -1245,8 +1326,7 @@ class VideoProcessor:
             print(f"  🔟 推送overlay:            {perf_timings.get('push_overlay', 0):7.2f} ms")
             print(f"\n  {'🎯 总耗时:':<25} {total_time:7.2f} ms")
             print(f"{'='*80}\n")
-        else:
-            # 非详细输出帧，只输出简短信息
+        elif state["processed_frames"] % self.frame_log_every == 0:
             print(
                 f"帧 {frame_count}: video_overlay vehicles={len(overlay['data']['vehicles'])} "
                 f"plates={len(overlay['data']['plates'])} illegal={len(overlay['data']['illegal_parking'])} "
@@ -1376,8 +1456,12 @@ class VideoProcessor:
                 "y_end": int(height),
             })
 
-        summary = f"检测到{len(lanes)}个车道，{len(lane_lines)}条分隔线，共{sum(lane_counts.values())}辆车"
-        print(f"traffic_density (车道模式): {summary}")
+        if state["processed_frames"] % self.frame_log_every == 0:
+            summary = (
+                f"检测到{len(lanes)}个车道，{len(lane_lines)}条分隔线，"
+                f"共{sum(lane_counts.values())}辆车"
+            )
+            print(f"traffic_density (车道模式): {summary}")
 
         return {
             "event_type": "traffic_density",
@@ -1572,7 +1656,19 @@ class VideoProcessor:
             j = i
         return inside
 
-    def _build_video_overlay(self, device_id, timestamp, frame, state, active_scene, tracked_vehicles, parking_events, anomaly_events, plate_events):
+    def _build_video_overlay(
+        self,
+        device_id,
+        timestamp,
+        frame,
+        state,
+        active_scene,
+        tracked_vehicles,
+        parking_events,
+        parking_statuses,
+        anomaly_events,
+        plate_events,
+    ):
         overlay = {
             'event_type': 'video_overlay',
             'timestamp': timestamp,
@@ -1589,6 +1685,8 @@ class VideoProcessor:
                 'traffic_regions': [],
                 'no_parking_zones': [],
                 'illegal_parking': [],
+                'parking_statuses': [],
+                'anomaly_road_roi': [],
                 'road_anomalies': [],
             },
         }
@@ -1634,17 +1732,44 @@ class VideoProcessor:
                 'label': f"track {event.get('data', {}).get('track_id', '-') } {event.get('data', {}).get('stay_time', 0)}s",
             })
 
-        for zone in state.get('no_parking_zones', []):
-            polygon = zone.get('polygon', [])
-            if len(polygon) < 3:
-                continue
-            overlay['data']['no_parking_zones'].append({
-                'zone_id': zone.get('zone_id', 'no_parking'),
-                'name': zone.get('name', '禁停区'),
-                'polygon': [[int(x), int(y)] for x, y in polygon],
-                'threshold': zone.get('threshold_seconds', 0),
-                'label': zone.get('name', '禁停区'),
-            })
+        if active_scene == 'illegal_parking':
+            for status in parking_statuses:
+                stay_time = float(status.get('stay_time', 0))
+                threshold = float(status.get('threshold', 0))
+                is_stationary = bool(status.get('is_stationary'))
+                has_warned = bool(status.get('has_warned'))
+                if has_warned:
+                    label = f"illegal {stay_time:.1f}s"
+                elif is_stationary:
+                    label = f"parking {stay_time:.1f}/{threshold:.1f}s"
+                else:
+                    label = "vehicle moving"
+                overlay['data']['parking_statuses'].append({
+                    **status,
+                    'bbox': [int(v) for v in status.get('bbox', [])],
+                    'label': label,
+                })
+
+        if active_scene == 'illegal_parking':
+            for zone in state.get('no_parking_zones', []):
+                polygon = zone.get('polygon', [])
+                if len(polygon) < 3:
+                    continue
+                overlay['data']['no_parking_zones'].append({
+                    'zone_id': zone.get('zone_id', 'no_parking'),
+                    'name': zone.get('name', '禁停区'),
+                    'polygon': [[int(x), int(y)] for x, y in polygon],
+                    'threshold': zone.get('threshold_seconds', 0),
+                    'label': zone.get('name', '禁停区'),
+                })
+
+        if active_scene == 'road_anomaly':
+            polygon = state.get('anomaly_road_roi', [])
+            if len(polygon) >= 3:
+                overlay['data']['anomaly_road_roi'].append({
+                    'polygon': [[int(x), int(y)] for x, y in polygon],
+                    'label': '异物检测区',
+                })
 
         for event in anomaly_events:
             bbox = [int(v) for v in event.get('bbox', [])]
@@ -1675,11 +1800,8 @@ class VideoProcessor:
         except Exception as e:
             print(f"⚠️  调试帧保存失败: {str(e)}")
 
-    def _save_road_mask_debug(self, frame, frame_count):
+    def _save_road_mask_debug(self, road_mask, frame_count):
         try:
-            if not self.anomaly_processor:
-                return
-            road_mask = self.anomaly_processor.predict_road_mask(frame)
             if road_mask is None:
                 return
             self.debug_output_dir.mkdir(parents=True, exist_ok=True)

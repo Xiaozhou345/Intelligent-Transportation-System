@@ -222,6 +222,20 @@ class PlateRecognizer:
         self.model.eval()
 
         print("车牌识别器初始化完成")
+        if os.getenv('ITS_WARMUP_MODELS', 'true').lower() == 'true':
+            self._warmup()
+
+    def _warmup(self):
+        """Initialize LPRNet kernels before the first recognized plate."""
+        try:
+            dummy = torch.zeros((1, 3, self.img_size[1], self.img_size[0]), device=self.device)
+            with torch.no_grad():
+                self.model(dummy)
+            if self.device.type == 'cuda':
+                torch.cuda.synchronize()
+            print("车牌识别器预热完成")
+        except Exception as exc:
+            print(f"车牌识别器预热失败，将在首次识别时重试: {exc}")
 
     def _load_compatible_state_dict(self, model_path):
         """兼容纯 state_dict 与包含 model_state_dict 的 checkpoint。"""

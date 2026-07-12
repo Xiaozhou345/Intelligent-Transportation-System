@@ -36,17 +36,16 @@
       }
     ],
     "parking_stationary_pixel_threshold": 35,
-    "parking_release_grace_frames": 4,
+    "parking_release_grace_frames": 15,
     "parking_min_history": 3,
     "density_emit_every_processed_frames": 3,
     "anomaly_mode": "background_learning",
-    "anomaly_min_background_frames": 8,
+    "anomaly_min_background_frames": 12,
     "anomaly_road_roi": [
-      [0.12, 0.06],
-      [0.80, 0.06],
-      [0.80, 0.42],
-      [0.84, 0.88],
-      [0.12, 0.88]
+      [0.03, 0.42],
+      [0.86, 0.42],
+      [0.84, 0.84],
+      [0.03, 0.84]
     ]
   }
 }

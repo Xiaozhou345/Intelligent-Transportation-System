@@ -54,6 +54,7 @@ class RoadAnomalyProcessor:
         self.last_emitted_frames = {}
         self.processed_frames = 0
         self.recent_warning_regions = deque(maxlen=max_results)
+        self.current_results = []
         self.drivable_segmenter = None
 
         if drivable_model_path:
@@ -66,6 +67,7 @@ class RoadAnomalyProcessor:
 
     def update_background(self, frame, road_mask=None, vehicle_bboxes=None):
         """Feed clean static-camera frames into the background model."""
+        self.current_results = []
         if road_mask is None and self.drivable_segmenter:
             road_mask = self.drivable_segmenter.predict_mask(frame)
         return self.detector.update_background(
@@ -99,21 +101,24 @@ class RoadAnomalyProcessor:
             road_mask=road_mask,
         )
         events = []
+        current_results = []
 
         for anomaly in anomalies:
             if self.warning_only and anomaly["status"] != "warning":
                 continue
             if not self.emit_normal and anomaly["status"] == "normal":
                 continue
-            if anomaly["status"] == "warning" and not self._should_emit_warning(anomaly):
-                continue
 
             event = self._build_event(device_id, timestamp, anomaly)
+            current_results.append(event)
+            if anomaly["status"] == "warning" and not self._should_emit_warning(anomaly):
+                continue
             events.append(event)
 
             if event["status"] == "warning":
                 self.latest_results.append(event)
 
+        self.current_results = current_results
         return events
 
     def predict_road_mask(self, frame):
@@ -134,12 +139,17 @@ class RoadAnomalyProcessor:
         self.last_emitted_frames.clear()
         self.processed_frames = 0
         self.recent_warning_regions.clear()
+        self.current_results = []
 
     def get_latest_results(self, max_count=10):
         """Return the latest warning events without consuming them."""
         if max_count <= 0:
             return []
         return list(self.latest_results)[-max_count:]
+
+    def get_current_results(self):
+        """Return warnings present in the current frame, independent of alert deduplication."""
+        return list(self.current_results)
 
     def _build_event(self, device_id, timestamp, anomaly):
         bbox = anomaly["bbox"]

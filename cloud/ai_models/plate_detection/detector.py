@@ -4,6 +4,8 @@
 """
 from ultralytics import YOLO
 import os
+import time
+import numpy as np
 
 
 class PlateDetector:
@@ -39,6 +41,34 @@ class PlateDetector:
             f"(设备: {self.device}, imgsz: {self.imgsz}, FP16: {self.use_half}, "
             f"conf: {self.conf_threshold})"
         )
+        if os.getenv('ITS_WARMUP_MODELS', 'true').lower() == 'true':
+            self.warmup()
+
+    def warmup(self):
+        """Initialize CUDA kernels before the plate scene is selected."""
+        started_at = time.perf_counter()
+        warmup_width = int(os.getenv('ITS_WARMUP_WIDTH', '1280'))
+        warmup_height = int(os.getenv('ITS_WARMUP_HEIGHT', '720'))
+        dummy = np.zeros((warmup_height, warmup_width, 3), dtype=np.uint8)
+        try:
+            self.model.predict(
+                source=dummy,
+                conf=self.conf_threshold,
+                imgsz=self.imgsz,
+                device=self.device,
+                half=self.use_half,
+                verbose=False,
+            )
+            if self.device == 'cuda':
+                import torch
+                torch.cuda.synchronize()
+            elapsed_ms = (time.perf_counter() - started_at) * 1000
+            print(
+                f"车牌检测器预热完成: {elapsed_ms:.1f}ms "
+                f"({warmup_width}x{warmup_height})"
+            )
+        except Exception as exc:
+            print(f"车牌检测器预热失败，将在首帧重试: {exc}")
 
     def detect(self, frame):
         """

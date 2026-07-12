@@ -49,6 +49,8 @@ let receivedVideoFrame = false
 let playbackWatchdog = null
 let lastPlaybackTime = -1
 let stalledChecks = 0
+let overlayClearTimer = null
+const OVERLAY_STALE_MS = 1200
 
 const calculateVideoViewport = () => {
   const video = videoRef.value
@@ -354,12 +356,26 @@ const clearCanvas = () => {
   ctx.clearRect(0, 0, canvas.width, canvas.height)
 }
 
+const scheduleOverlayExpiry = () => {
+  if (overlayClearTimer) window.clearTimeout(overlayClearTimer)
+  overlayClearTimer = window.setTimeout(() => {
+    overlayClearTimer = null
+    pendingBoxes.value = []
+    pendingSourceSize.value = null
+    clearCanvas()
+  }, OVERLAY_STALE_MS)
+}
+
 const drawBoxes = (boxes, sourceSize = null) => {
   const video = videoRef.value
   const canvas = canvasRef.value
   
   if (!video || !canvas) return
   if (!boxes || boxes.length === 0) {
+    if (overlayClearTimer) {
+      window.clearTimeout(overlayClearTimer)
+      overlayClearTimer = null
+    }
     pendingBoxes.value = []
     pendingSourceSize.value = null
     clearCanvas()
@@ -369,10 +385,12 @@ const drawBoxes = (boxes, sourceSize = null) => {
   if (!video.videoWidth || !video.videoHeight) {
     pendingBoxes.value = boxes
     pendingSourceSize.value = sourceSize
+    scheduleOverlayExpiry()
     return
   }
   pendingBoxes.value = boxes
   pendingSourceSize.value = sourceSize
+  scheduleOverlayExpiry()
   _drawBoxesInternal(boxes, sourceSize)
 }
 
@@ -509,6 +527,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (playbackWatchdog) window.clearInterval(playbackWatchdog)
+  if (overlayClearTimer) window.clearTimeout(overlayClearTimer)
   destroyHls()
   destroyWebrtc()
   window.removeEventListener('resize', handleResize)
