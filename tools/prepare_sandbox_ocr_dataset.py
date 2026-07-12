@@ -3,6 +3,7 @@ import csv
 import random
 import shutil
 import sys
+from collections import defaultdict
 from pathlib import Path
 
 import cv2
@@ -76,14 +77,29 @@ def main():
                 "label": label,
             })
 
+    # Keep every crop from the same source frame in a single split. Splitting
+    # crops independently leaks nearly identical visual context into validation.
+    grouped_rows = defaultdict(list)
+    for row in rows:
+        grouped_rows[row["source_image"]].append(row)
+
+    source_images = sorted(grouped_rows)
     random.seed(args.seed)
-    random.shuffle(rows)
-    val_count = int(round(len(rows) * args.val_ratio))
-    val_rows = rows[:val_count]
-    train_rows = rows[val_count:]
+    random.shuffle(source_images)
+    val_source_count = int(round(len(source_images) * args.val_ratio))
+    if len(source_images) > 1:
+        val_source_count = min(len(source_images) - 1, max(1, val_source_count))
+    else:
+        val_source_count = 0
+    val_sources = set(source_images[:val_source_count])
+    val_rows = [row for source in source_images if source in val_sources for row in grouped_rows[source]]
+    train_rows = [row for source in source_images if source not in val_sources for row in grouped_rows[source]]
 
     for split in ("train", "val"):
-        (output_dir / split).mkdir(parents=True, exist_ok=True)
+        split_dir = output_dir / split
+        if split_dir.exists():
+            shutil.rmtree(split_dir)
+        split_dir.mkdir(parents=True, exist_ok=True)
 
     def write_split(split, split_rows):
         manifest_path = output_dir / f"{split}.csv"
@@ -107,8 +123,13 @@ def main():
 
     print(f"output: {output_dir}")
     print(f"total crops: {len(rows)}")
-    print(f"train crops: {len(train_rows)} -> {train_manifest}")
-    print(f"val crops: {len(val_rows)} -> {val_manifest}")
+    print(
+        f"train crops: {len(train_rows)} from "
+        f"{len(source_images) - len(val_sources)} source images -> {train_manifest}"
+    )
+    print(f"val crops: {len(val_rows)} from {len(val_sources)} source images -> {val_manifest}")
+    overlap = {row["source_image"] for row in train_rows} & {row["source_image"] for row in val_rows}
+    print(f"source overlap: {len(overlap)}")
     print("请人工确认 labels CSV 后再将该数据用于训练。")
 
 
