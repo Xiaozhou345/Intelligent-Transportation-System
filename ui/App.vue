@@ -625,8 +625,17 @@ const loadHistoryData = async () => {
           data: event.result_json || {},
           plate_number: event.plate_number
         }))
-        // 将历史数据添加到事件记录（放在最前面）
+
+        // 将历史数据添加到事件记录
         eventRecords.value = [...historyEvents, ...eventRecords.value]
+
+        // 提取车牌识别记录到 plateRecords
+        const plateHistory = historyEvents.filter(e => e.event_type === 'plate_recognition')
+        if (plateHistory.length > 0) {
+          plateRecords.value = [...plateHistory.slice(0, 10), ...plateRecords.value]
+          console.log(`✅ 加载了 ${plateHistory.length} 条车牌识别历史`)
+        }
+
         console.log(`✅ 加载了 ${historyEvents.length} 条历史事件`)
       }
     }
