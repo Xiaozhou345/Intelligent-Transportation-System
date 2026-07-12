@@ -1480,28 +1480,10 @@ class VideoProcessor:
                 },
             })
 
-            # 🔥 优化：同时发送 overlay 元数据（用于统计面板），但不重复推送完整 overlay
-            # 这样前端可以获取统计数据，但不会重复绘制检测框
-            self._send_result({
-                'event_type': 'video_overlay',
-                'timestamp': timestamp,
-                'device_id': device_id,
-                'status': 'normal',
-                'sequence': int(frame_count),
-                'analysis_latency_ms': overlay['analysis_latency_ms'],
-                'stream_size': overlay['stream_size'],
-                'active_scene': active_scene,
-                'data': {
-                    # 只传递统计数据，不传递具体坐标（前端不需要绘制）
-                    'vehicle_count': len(overlay['data']['vehicles']),
-                    'plate_count': len(overlay['data']['plates']),
-                    'illegal_parking_count': len(overlay['data']['illegal_parking']),
-                    'parking_status_count': len(overlay['data']['parking_statuses']),
-                    'road_anomaly_count': len(overlay['data']['road_anomalies']),
-                    'no_parking_zone_count': len(overlay['data']['no_parking_zones']),
-                    'traffic_region_count': len(overlay['data']['traffic_regions']),
-                }
-            })
+            # 🔥 关键修复：推送完整的 overlay 数据
+            # EventStream.vue 和 HistoryQuery.vue 需要完整的 bbox 数据来显示统计
+            # 前端会使用 skipDraw=true 来避免重复绘制
+            self._send_result(overlay)
 
             perf_timings['websocket_send'] = (time.time() - push_start) * 1000
 
