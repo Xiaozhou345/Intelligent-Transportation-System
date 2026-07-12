@@ -4,7 +4,6 @@ import argparse
 import csv
 import random
 import sys
-from collections import Counter
 from pathlib import Path
 
 import cv2
@@ -22,62 +21,6 @@ from cloud.ai_models.plate_recognition.plate_recognizer import (  # noqa: E402
     CHARS_DICT,
     LPRNet,
 )
-
-
-def augment_plate(image: np.ndarray) -> np.ndarray:
-    """Apply mild degradations seen in the sandbox camera without changing text."""
-    height, width = image.shape[:2]
-
-    if random.random() < 0.35:
-        max_dx = width * 0.035
-        max_dy = height * 0.08
-        source = np.float32([[0, 0], [width - 1, 0], [width - 1, height - 1], [0, height - 1]])
-        target = source + np.float32(
-            [[random.uniform(-max_dx, max_dx), random.uniform(-max_dy, max_dy)] for _ in range(4)]
-        )
-        transform = cv2.getPerspectiveTransform(source, target)
-        image = cv2.warpPerspective(
-            image,
-            transform,
-            (width, height),
-            flags=cv2.INTER_LINEAR,
-            borderMode=cv2.BORDER_REPLICATE,
-        )
-
-    if random.random() < 0.35:
-        scale = random.uniform(0.55, 0.88)
-        reduced = cv2.resize(
-            image,
-            (max(32, round(width * scale)), max(10, round(height * scale))),
-            interpolation=cv2.INTER_AREA,
-        )
-        image = cv2.resize(reduced, (width, height), interpolation=cv2.INTER_LINEAR)
-
-    if random.random() < 0.45:
-        alpha = random.uniform(0.78, 1.22)
-        beta = random.uniform(-16, 16)
-        image = np.clip(image.astype(np.float32) * alpha + beta, 0, 255).astype(np.uint8)
-
-    if random.random() < 0.28:
-        if random.random() < 0.5:
-            image = cv2.GaussianBlur(image, (3, 3), random.uniform(0.2, 0.8))
-        else:
-            kernel = np.zeros((3, 3), dtype=np.float32)
-            kernel[random.choice((0, 1, 2)), :] = 1 / 3
-            image = cv2.filter2D(image, -1, kernel)
-
-    if random.random() < 0.25:
-        noise = np.random.normal(0, random.uniform(2.0, 7.0), image.shape)
-        image = np.clip(image.astype(np.float32) + noise, 0, 255).astype(np.uint8)
-
-    if random.random() < 0.25:
-        ok, encoded = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, random.randint(55, 90)])
-        if ok:
-            decoded = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
-            if decoded is not None:
-                image = decoded
-
-    return image
 
 
 class PlateDataset(Dataset):
@@ -108,7 +51,15 @@ class PlateDataset(Dataset):
             raise ValueError(f"Cannot read {path}")
         image = cv2.resize(image, (94, 24))
         if self.augment:
-            image = augment_plate(image)
+            if random.random() < 0.4:
+                alpha = random.uniform(0.75, 1.25)
+                beta = random.uniform(-18, 18)
+                image = cv2.convertScaleAbs(image, alpha=alpha, beta=beta)
+            if random.random() < 0.25:
+                try:
+                    image = cv2.GaussianBlur(np.ascontiguousarray(image), (3, 3), 0)
+                except cv2.error:
+                    pass
         image = image.astype(np.float32)
         image = (image - 127.5) * 0.0078125
         image = np.transpose(image, (2, 0, 1))
@@ -171,33 +122,15 @@ def main() -> None:
     parser.add_argument("--ccpd-dir", default="data/ccpd_plate_ocr")
     parser.add_argument("--sandbox-dir", default="data/sandbox_plate_ocr")
     parser.add_argument("--pretrained", default="cloud/ai_models/plate_recognition/Final_LPRNet_model.pth")
-    parser.add_argument("--output", default="cloud/ai_models/plate_recognition/sandbox_lprnet_candidate_v2.pth")
-    parser.add_argument("--epochs", type=int, default=8)
+    parser.add_argument("--output", default="cloud/ai_models/plate_recognition/sandbox_lprnet_best.pth")
+    parser.add_argument("--epochs", type=int, default=4)
     parser.add_argument("--batch-size", type=int, default=64)
-    parser.add_argument("--lr", type=float, default=5e-5)
-    parser.add_argument(
-        "--sandbox-ratio",
-        type=float,
-        default=0.35,
-        help="Target fraction of sandbox samples drawn per epoch.",
-    )
-    parser.add_argument(
-        "--sandbox-weight",
-        type=float,
-        default=None,
-        help="Legacy per-sample weight; overrides --sandbox-ratio when provided.",
-    )
-    parser.add_argument("--samples-per-epoch", type=int, default=2400)
-    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument("--sandbox-weight", type=float, default=12.0)
+    parser.add_argument("--samples-per-epoch", type=int, default=1200)
     parser.add_argument("--freeze-batchnorm", action="store_true")
     parser.add_argument("--freeze-backbone", action="store_true")
     args = parser.parse_args()
-
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(args.seed)
 
     ccpd_dir, sandbox_dir = Path(args.ccpd_dir), Path(args.sandbox_dir)
     train_set = PlateDataset([ccpd_dir / "train.csv", sandbox_dir / "train.csv"], augment=True)
@@ -205,26 +138,9 @@ def main() -> None:
     if not train_set or not val_set:
         raise SystemExit(f"Empty dataset: train={len(train_set)}, val={len(val_set)}")
 
-    source_counts = Counter(source for _, _, source in train_set.rows)
-    ccpd_count = source_counts.get("ccpd", 0)
-    sandbox_count = len(train_set) - ccpd_count
-    if ccpd_count == 0 or sandbox_count == 0:
-        raise SystemExit(f"Both CCPD and sandbox samples are required: {dict(source_counts)}")
-    if args.sandbox_weight is not None:
-        weights = [args.sandbox_weight if source != "ccpd" else 1.0 for _, _, source in train_set.rows]
-        sandbox_mass = sandbox_count * args.sandbox_weight
-        effective_sandbox_ratio = sandbox_mass / (ccpd_count + sandbox_mass)
-    else:
-        if not 0 < args.sandbox_ratio < 1:
-            raise SystemExit("--sandbox-ratio must be between 0 and 1")
-        weights = [
-            (1 - args.sandbox_ratio) / ccpd_count if source == "ccpd" else args.sandbox_ratio / sandbox_count
-            for _, _, source in train_set.rows
-        ]
-        effective_sandbox_ratio = args.sandbox_ratio
-    epoch_samples = args.samples_per_epoch if args.samples_per_epoch > 0 else len(train_set)
-    generator = torch.Generator().manual_seed(args.seed)
-    sampler = WeightedRandomSampler(weights, num_samples=epoch_samples, replacement=True, generator=generator)
+    weights = [args.sandbox_weight if source != "ccpd" else 1.0 for _, _, source in train_set.rows]
+    epoch_samples = min(args.samples_per_epoch, len(train_set)) if args.samples_per_epoch > 0 else len(train_set)
+    sampler = WeightedRandomSampler(weights, num_samples=epoch_samples, replacement=True)
     train_loader = DataLoader(train_set, batch_size=args.batch_size, sampler=sampler, collate_fn=collate, num_workers=0)
     val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=False, collate_fn=collate, num_workers=0)
 
@@ -246,8 +162,6 @@ def main() -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     print(
         f"Device: {device}; train_pool={len(train_set)}; "
-        f"ccpd_train={ccpd_count}; sandbox_train={sandbox_count}; "
-        f"sandbox_ratio={effective_sandbox_ratio:.0%}; "
         f"samples_per_epoch={epoch_samples}; sandbox_val={len(val_set)}",
         flush=True,
     )
