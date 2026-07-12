@@ -20,13 +20,13 @@ class LaneDetector:
 
     def __init__(
         self,
-        min_line_length: int = 100,
-        max_line_gap: int = 50,
+        min_line_length: int = 150,  # 提高最小长度，过滤短线段
+        max_line_gap: int = 30,       # 降低间隙，更严格
         rho: int = 1,
         theta: float = np.pi / 180,
-        threshold: int = 50,
-        vertical_tolerance: float = 15.0,
-        cache_frames: int = 10,
+        threshold: int = 80,           # 提高阈值，减少误检
+        vertical_tolerance: float = 10.0,  # 降低角度容差，更严格
+        cache_frames: int = 15,        # 增加缓存，更平滑
     ):
         """
         初始化车道线检测器
