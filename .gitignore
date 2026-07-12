@@ -68,6 +68,7 @@ logs/
 .env
 .env.local
 .env.*.local
+.env.db
 config.ini
 secrets.json
 credentials.json

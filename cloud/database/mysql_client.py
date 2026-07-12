@@ -1,6 +1,6 @@
 """
 MySQL 存储访问层
-优先从环境变量读取数据库配置；默认尝试本机 127.0.0.1:3306。
+优先从 .env.db 文件读取数据库配置；其次从环境变量；最后使用默认值。
 """
 from __future__ import annotations
 
@@ -13,13 +13,54 @@ import pymysql
 from pymysql.cursors import DictCursor
 
 
+def _load_db_config_from_file():
+    """
+    从 .env.db 文件加载数据库配置
+
+    Returns:
+        dict: 配置字典，如果文件不存在则返回空字典
+    """
+    # 查找 .env.db 文件位置（项目根目录）
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(os.path.dirname(current_dir))
+    env_db_path = os.path.join(project_root, '.env.db')
+
+    config = {}
+
+    if os.path.exists(env_db_path):
+        try:
+            with open(env_db_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    # 跳过注释和空行
+                    if not line or line.startswith('#'):
+                        continue
+                    # 解析 KEY=VALUE 格式
+                    if '=' in line:
+                        key, value = line.split('=', 1)
+                        key = key.strip()
+                        value = value.strip()
+                        config[key] = value
+            print(f"✅ 从 .env.db 加载数据库配置: {env_db_path}")
+        except Exception as e:
+            print(f"⚠️  读取 .env.db 失败: {e}")
+    else:
+        print(f"⚠️  未找到 .env.db 文件: {env_db_path}")
+        print(f"   将使用环境变量或默认配置")
+
+    return config
+
+
+# 加载配置文件
+_file_config = _load_db_config_from_file()
+
+# 数据库配置：优先级 环境变量 > .env.db 文件 > 默认值
 DB_SETTINGS = {
-    'host': os.getenv('ITS_DB_HOST', '127.0.0.1'),
-    'port': int(os.getenv('ITS_DB_PORT', '3306')),
-    'user': os.getenv('ITS_DB_USER', 'root'),
-    # 不在代码中提供可猜测的生产密码；本地无密码 MySQL 仍可显式留空。
-    'password': os.getenv('ITS_DB_PASSWORD', ''),
-    'database': os.getenv('ITS_DB_NAME', 'intelligent_transportation_system'),
+    'host': os.getenv('ITS_DB_HOST') or _file_config.get('DB_HOST', '127.0.0.1'),
+    'port': int(os.getenv('ITS_DB_PORT') or _file_config.get('DB_PORT', '3306')),
+    'user': os.getenv('ITS_DB_USER') or _file_config.get('DB_USER', 'root'),
+    'password': os.getenv('ITS_DB_PASSWORD') or _file_config.get('DB_PASSWORD', ''),
+    'database': os.getenv('ITS_DB_NAME') or _file_config.get('DB_NAME', 'intelligent_transportation_system'),
     'charset': 'utf8mb4',
     'cursorclass': DictCursor,
     'autocommit': True,
