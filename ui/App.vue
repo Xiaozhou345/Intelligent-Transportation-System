@@ -639,6 +639,8 @@ const loadHistoryData = async () => {
         console.log(`✅ 加载了 ${whitelistData.data.length} 条白名单`)
         // 将白名单数据存储到全局状态（供 WhitelistManager 使用）
         window.initialWhitelist = whitelistData.data
+        // 触发自定义事件通知白名单已加载
+        window.dispatchEvent(new CustomEvent('whitelist-loaded', { detail: whitelistData.data }))
       }
     }
 
@@ -651,17 +653,19 @@ const loadHistoryData = async () => {
         window.systemConfig = configData.data
       }
     }
+
+    console.log('✅ 历史数据加载完成')
   } catch (error) {
     console.warn('⚠️  加载历史数据失败:', error.message)
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
   if (isPublisherMode) return
   loadSavedUser()
 
-  // 加载历史数据
-  loadHistoryData()
+  // 先加载历史数据（使用 await 确保完成）
+  await loadHistoryData()
 
   clockTimer = setInterval(() => {
     currentTime.value = new Date()

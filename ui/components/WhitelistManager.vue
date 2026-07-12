@@ -1,5 +1,5 @@
 <script setup>
-import { reactive, ref, onMounted } from 'vue'
+import { reactive, ref, onMounted, onUnmounted } from 'vue'
 import { ElButton, ElDialog, ElForm, ElFormItem, ElInput, ElMessage, ElTable, ElTableColumn, ElTag } from 'element-plus'
 
 const emit = defineEmits(['send-command'])
@@ -14,9 +14,9 @@ const form = reactive({
 })
 
 // 从数据库加载白名单
-onMounted(() => {
-  if (window.initialWhitelist && window.initialWhitelist.length > 0) {
-    whitelist.value = window.initialWhitelist.map(item => ({
+const loadWhitelist = (data) => {
+  if (data && data.length > 0) {
+    whitelist.value = data.map(item => ({
       id: item.id,
       plate: item.plate_number,
       owner: item.owner || '未知',
@@ -26,6 +26,24 @@ onMounted(() => {
     }))
     console.log(`✅ WhitelistManager 加载了 ${whitelist.value.length} 条白名单`)
   }
+}
+
+onMounted(() => {
+  // 方式1: 如果数据已经加载完成
+  if (window.initialWhitelist && window.initialWhitelist.length > 0) {
+    loadWhitelist(window.initialWhitelist)
+  }
+
+  // 方式2: 监听加载完成事件（处理异步加载）
+  const handleWhitelistLoaded = (event) => {
+    loadWhitelist(event.detail)
+  }
+  window.addEventListener('whitelist-loaded', handleWhitelistLoaded)
+
+  // 清理事件监听
+  onUnmounted(() => {
+    window.removeEventListener('whitelist-loaded', handleWhitelistLoaded)
+  })
 })
 
 const resetForm = () => {
