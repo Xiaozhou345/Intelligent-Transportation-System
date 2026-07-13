@@ -65,7 +65,11 @@ const decisionStatus = computed(() => {
     <ElCard title="识别记录（最近10条）" class="records-card">
       <ElTable :data="records" stripe size="small" :max-height="300">
         <ElTableColumn type="index" label="序号" width="60" align="center" />
-        <ElTableColumn prop="data.plate_number" label="车牌号" width="120" />
+        <ElTableColumn label="车牌号" width="120">
+          <template #default="{ row }">
+            {{ row.plate_number || row.data?.plate_number || '-' }}
+          </template>
+        </ElTableColumn>
         <ElTableColumn label="白名单" width="80" align="center">
           <template #default="{ row }">
             <ElTag :type="row.data?.is_in_whitelist ? 'success' : 'danger'" size="small">
