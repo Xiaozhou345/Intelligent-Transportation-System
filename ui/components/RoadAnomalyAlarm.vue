@@ -81,9 +81,7 @@ const getModeText = (mode) => {
 }
 
 const calibrationReasonMap = {
-  vehicles_not_allowed: '严格标定模式不允许车辆',
-  vehicle_mask_too_large: '车辆遮挡道路过多',
-  insufficient_visible_road: '有效道路区域不足',
+  insufficient_visible_road: '有效道路几乎全部被遮挡',
   empty_frame: '视频帧无效'
 }
 

@@ -227,9 +227,6 @@ class VideoProcessor:
                     dino_detector_kwargs["max_candidates"] = int(
                         os.getenv("ITS_DINO_MAX_CANDIDATES", "1")
                     )
-                    dino_detector_kwargs["max_background_vehicle_ratio"] = float(
-                        os.getenv("ITS_DINO_MAX_BG_VEHICLE_RATIO", "0.65")
-                    )
                     detector = DinoReferenceDetector(
                         model_name=os.getenv("ITS_DINO_MODEL", "dinov2_vits14_reg"),
                         image_size=int(os.getenv("ITS_DINO_IMAGE_SIZE", "518")),
@@ -241,10 +238,10 @@ class VideoProcessor:
                         top_fraction=float(os.getenv("ITS_DINO_TOP_FRACTION", "0.005")),
                         camera_change_ratio=float(os.getenv("ITS_DINO_CAMERA_CHANGE_RATIO", "0.30")),
                         camera_change_frames=int(os.getenv("ITS_DINO_CAMERA_CHANGE_FRAMES", "3")),
-                        allow_background_vehicles=os.getenv(
-                            "ITS_DINO_ALLOW_BG_VEHICLES",
-                            "true",
-                        ).lower() == "true",
+                        min_background_valid_ratio=float(os.getenv(
+                            "ITS_DINO_MIN_BG_VALID_RATIO",
+                            "0.10",
+                        )),
                         min_thin_side=int(os.getenv("ITS_DINO_MIN_THIN_SIDE", "18")),
                         max_thin_aspect=float(os.getenv("ITS_DINO_MAX_THIN_ASPECT", "4.0")),
                         filter_lane_markings=False,

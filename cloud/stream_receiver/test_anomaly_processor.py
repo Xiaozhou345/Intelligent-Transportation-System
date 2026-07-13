@@ -324,7 +324,6 @@ class DinoReferenceDetectorTest(unittest.TestCase):
             feature_extractor=self.fake_features,
             device="cpu",
             use_default_road_scope=False,
-            max_background_vehicle_ratio=0.65,
         )
 
         learned = detector.update_background(
@@ -343,7 +342,6 @@ class DinoReferenceDetectorTest(unittest.TestCase):
             feature_extractor=self.fake_features,
             device="cpu",
             use_default_road_scope=False,
-            max_background_vehicle_ratio=0.20,
         )
 
         learned = detector.update_background(
@@ -355,11 +353,11 @@ class DinoReferenceDetectorTest(unittest.TestCase):
         self.assertFalse(learned)
         self.assertEqual(0, detector.background_frames)
         self.assertEqual(
-            "vehicle_mask_too_large",
+            "insufficient_visible_road",
             detector.last_background_skip_reason,
         )
 
-    def test_reference_strict_calibration_still_rejects_vehicles(self):
+    def test_reference_legacy_strict_flag_no_longer_rejects_vehicle(self):
         detector = DinoReferenceDetector(
             feature_extractor=self.fake_features,
             device="cpu",
@@ -373,8 +371,28 @@ class DinoReferenceDetectorTest(unittest.TestCase):
             vehicle_bboxes=[[100, 80, 180, 170]],
         )
 
-        self.assertFalse(learned)
-        self.assertEqual("vehicles_not_allowed", detector.last_background_skip_reason)
+        self.assertTrue(learned)
+        self.assertEqual(1, detector.background_frames)
+        self.assertIsNone(detector.last_background_skip_reason)
+
+    def test_reference_calibration_uses_road_relative_visible_ratio(self):
+        detector = DinoReferenceDetector(
+            feature_extractor=self.fake_features,
+            device="cpu",
+            use_default_road_scope=False,
+        )
+        narrow_road = np.zeros_like(self.road_mask)
+        cv2.rectangle(narrow_road, (120, 90), (190, 150), 255, -1)
+
+        learned = detector.update_background(
+            self.background,
+            road_mask=narrow_road,
+            vehicle_bboxes=[],
+        )
+
+        self.assertTrue(learned)
+        self.assertEqual(1, detector.background_frames)
+        self.assertGreaterEqual(detector.last_background_valid_ratio, 0.99)
 
 
 if __name__ == "__main__":

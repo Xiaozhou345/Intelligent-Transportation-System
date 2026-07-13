@@ -31,6 +31,7 @@ class DinoReferenceDetector(AnomalyDetector):
         camera_change_ratio=0.30,
         camera_change_frames=3,
         allow_background_vehicles=True,
+        min_background_valid_ratio=0.10,
         min_thin_side=18,
         max_thin_aspect=4.0,
         feature_extractor: Callable | None = None,
@@ -57,7 +58,13 @@ class DinoReferenceDetector(AnomalyDetector):
         self.top_fraction = min(0.25, max(0.0001, float(top_fraction)))
         self.camera_change_ratio = min(0.95, max(0.05, float(camera_change_ratio)))
         self.camera_change_frames = max(1, int(camera_change_frames))
+        # Kept for compatibility with older callers. DINOv2 calibration now
+        # always masks vehicle patches instead of rejecting the whole frame.
         self.allow_background_vehicles = bool(allow_background_vehicles)
+        self.min_background_valid_ratio = min(
+            0.95,
+            max(0.01, float(min_background_valid_ratio)),
+        )
         self.min_thin_side = max(0, int(min_thin_side))
         self.max_thin_aspect = max(1.0, float(max_thin_aspect))
 
@@ -141,20 +148,29 @@ class DinoReferenceDetector(AnomalyDetector):
             )[0]
         return torch_functional.normalize(features.float(), dim=1)
 
-    def _feature_validity(self, frame_shape, feature_shape, road_mask, vehicle_bboxes):
+    def _feature_masks(self, frame_shape, feature_shape, road_mask, vehicle_bboxes):
         road_scope = self._build_road_scope(frame_shape[:2], road_mask)
         if road_scope is None:
             road_scope = np.full(frame_shape[:2], 255, dtype=np.uint8)
         vehicle_mask = self._build_vehicle_mask(vehicle_bboxes, frame_shape)
         valid = cv2.bitwise_and(road_scope, cv2.bitwise_not(vehicle_mask))
         feature_height, feature_width = feature_shape
-        valid = cv2.resize(
-            valid,
-            (feature_width, feature_height),
-            interpolation=cv2.INTER_AREA,
-        )
-        valid = (valid >= 192).astype(np.float32)
-        return torch.from_numpy(valid).to(self.device).view(1, 1, feature_height, feature_width)
+
+        def resize_mask(mask):
+            resized = cv2.resize(
+                mask,
+                (feature_width, feature_height),
+                interpolation=cv2.INTER_AREA,
+            )
+            resized = (resized >= 192).astype(np.float32)
+            return torch.from_numpy(resized).to(self.device).view(
+                1,
+                1,
+                feature_height,
+                feature_width,
+            )
+
+        return resize_mask(valid), resize_mask(road_scope)
 
     def _reference_features(self):
         if self.reference_sum is None or self.reference_count is None:
@@ -234,22 +250,24 @@ class DinoReferenceDetector(AnomalyDetector):
             vehicle_mask,
             road_scope,
         )
-        if vehicle_bboxes and not self.allow_background_vehicles:
-            self.last_background_skip_reason = "vehicles_not_allowed"
-            return False
-        if self._vehicle_mask_too_large(vehicle_mask, road_scope):
-            self.last_background_skip_reason = "vehicle_mask_too_large"
-            return False
-
         features = self._extract_features(frame)
-        validity = self._feature_validity(
+        validity, road_validity = self._feature_masks(
             frame.shape,
             features.shape[-2:],
             road_mask,
             vehicle_bboxes,
         )
-        self.last_background_valid_ratio = float(validity.mean().item())
-        if self.last_background_valid_ratio < 0.10:
+        road_patch_count = float(road_validity.sum().item())
+        visible_patch_count = float(validity.sum().item())
+        self.last_background_valid_ratio = (
+            visible_patch_count / road_patch_count
+            if road_patch_count > 0
+            else 0.0
+        )
+        if (
+            road_patch_count < 4
+            or self.last_background_valid_ratio < self.min_background_valid_ratio
+        ):
             self.last_background_skip_reason = "insufficient_visible_road"
             return False
 
