@@ -252,15 +252,15 @@ const formatDetail = (event) => {
     </div>
 
     <ElTable :data="filteredEvents" stripe size="small" max-height="320">
-      <ElTableColumn label="时间" width="130">
+      <ElTableColumn label="时间">
         <template #default="{ row }">{{ formatTime(row.timestamp) }}</template>
       </ElTableColumn>
-      <ElTableColumn label="类型" width="100">
+      <ElTableColumn label="类型">
         <template #default="{ row }">
           <ElTag size="small">{{ eventTypeText[row.event_type] || row.event_type }}</ElTag>
         </template>
       </ElTableColumn>
-      <ElTableColumn label="设备" width="110" prop="device_id" />
+      <ElTableColumn label="设备" prop="device_id" />
       <ElTableColumn label="详情">
         <template #default="{ row }">{{ formatDetail(row) }}</template>
       </ElTableColumn>

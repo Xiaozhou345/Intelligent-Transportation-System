@@ -13,13 +13,14 @@ const RoadAnomalyAlarm = defineAsyncComponent(() => import('./components/RoadAno
 const VehicleDetectionPanel = defineAsyncComponent(() => import('./components/VehicleDetectionPanel.vue'))
 const SystemMonitor = defineAsyncComponent(() => import('./components/SystemMonitor.vue'))
 const DeviceManager = defineAsyncComponent(() => import('./components/DeviceManager.vue'))
-const ConfigPanel = defineAsyncComponent(() => import('./components/ConfigPanel.vue'))
+import ConfigPanel from './components/ConfigPanel.vue'
 const DashboardStats = defineAsyncComponent(() => import('./components/DashboardStats.vue'))
 const CloudEdgeStatus = defineAsyncComponent(() => import('./components/CloudEdgeStatus.vue'))
 const EventStream = defineAsyncComponent(() => import('./components/EventStream.vue'))
 const HistoryQuery = defineAsyncComponent(() => import('./components/HistoryQuery.vue'))
 const WhitelistManager = defineAsyncComponent(() => import('./components/WhitelistManager.vue'))
 const UserSessionPanel = defineAsyncComponent(() => import('./components/UserSessionPanel.vue'))
+const RegisterPanel = defineAsyncComponent(() => import('./components/RegisterPanel.vue'))
 const AlarmWorkbench = defineAsyncComponent(() => import('./components/AlarmWorkbench.vue'))
 const DemoChecklist = defineAsyncComponent(() => import('./components/DemoChecklist.vue'))
 
@@ -60,6 +61,7 @@ const systemStatus = ref({})
 const anomalyModeStatus = ref({ mode: 'detecting', background_frames: 0, enabled: false })
 const currentUser = ref(null)
 const showLoginDialog = ref(false)
+const showRegisterDialog = ref(false)
 const alarmDispositionRecords = ref([])
 
 const dashboardStats = reactive({
@@ -99,8 +101,7 @@ const statusTypeMap = {
 
 const roleTextMap = {
   admin: '管理员',
-  operator: '值班员',
-  viewer: '访客'
+  user: '普通用户'
 }
 
 const activeSceneMeta = computed(() => {
@@ -115,7 +116,7 @@ const activeAlarmCount = computed(() => {
   return illegalCount + anomalyCount
 })
 
-const canOperate = computed(() => currentUser.value?.role === 'admin' || currentUser.value?.role === 'operator')
+const canOperate = computed(() => currentUser.value?.role === 'admin' || currentUser.value?.role === 'user')
 const canConfigure = computed(() => currentUser.value?.role === 'admin')
 
 const latestEventTime = computed(() => {
@@ -220,6 +221,19 @@ const handleLogout = () => {
     summary: `${user?.username || '用户'} 已退出`,
     data: { username: user?.username }
   })
+}
+
+const handleRegister = (user) => {
+  addEventRecord({
+    event_type: 'user_login',
+    timestamp: new Date().toISOString(),
+    device_id: 'frontend_console',
+    status: 'normal',
+    summary: `${user.username} 注册为${roleTextMap[user.role] || user.role}并登录`,
+    data: user
+  })
+  showRegisterDialog.value = false
+  handleLogin(user)
 }
 
 const applyAlarmStatus = (payload) => {
@@ -781,9 +795,11 @@ onUnmounted(() => {
             :user="currentUser"
             @login="handleLogin"
             @logout="handleLogout"
+            @register="showRegisterDialog = true"
           />
           <ConfigPanel v-if="canConfigure" @send-command="handleSendCommand" />
           <ElTag v-else type="info" size="large">只读模式</ElTag>
+          <RegisterPanel v-model:visible="showRegisterDialog" @register="handleRegister" />
         </div>
       </div>
     </header>
@@ -793,11 +809,15 @@ onUnmounted(() => {
         <div class="login-copy">
           <span class="login-eyebrow">访问控制</span>
           <h2>登录后进入视频监控台</h2>
-          <p>未登录状态不再直接展示实时视频画面。请选择身份进入系统，访客只能查看数据，值班员可处置告警，管理员可修改配置。</p>
+          <p>未登录状态不再直接展示实时视频画面。请选择身份进入系统，普通用户可查看数据和处置告警，管理员可注册上报设备、设置模型参数和管理白名单。</p>
         </div>
         <div class="login-card">
           <h3>用户登录</h3>
           <UserSessionPanel embedded @login="handleLogin" />
+          <div class="login-footer">
+            <span>还没有账号？</span>
+            <ElButton text @click="showRegisterDialog = true">立即注册</ElButton>
+          </div>
         </div>
       </section>
     </main>
@@ -877,15 +897,6 @@ onUnmounted(() => {
             :event-count="eventRecords.length"
             :alarm-count="activeAlarmCount"
           />
-          <SystemMonitor
-            :system-data="systemStatus"
-            :connection-status="connectionStatus"
-            :active-devices="onlineDeviceCount"
-            :active-streams="systemStatus.active_streams || (streamStatusText === '拉流中' ? 1 : 0)"
-            :event-count="eventRecords.length"
-            :alarm-count="activeAlarmCount"
-          />
-          <DeviceManager :devices="deviceList" @add-device="handleDeviceAdd" />
         </aside>
 
         <section class="center-stage">
@@ -942,31 +953,25 @@ onUnmounted(() => {
 
         <aside class="right-rail">
           <EventStream :events="eventRecords" />
-          <PlateResult :latest-result="latestPlateResult" :records="plateRecords" />
-          <IllegalParkingAlarm
-            :records="illegalParkingRecords"
-            :can-dispose="canOperate"
-            @dispose-alarm="applyAlarmStatus"
-          />
-          <RoadAnomalyAlarm
-            :records="roadAnomalyRecords"
-            :can-dispose="canOperate"
-            :can-operate="canOperate"
-            :mode-status="anomalyModeStatus"
-            @dispose-alarm="applyAlarmStatus"
-            @send-command="handleSendCommand"
+          <SystemMonitor
+            :system-data="systemStatus"
+            :connection-status="connectionStatus"
+            :active-devices="onlineDeviceCount"
+            :active-streams="systemStatus.active_streams || (streamStatusText === '拉流中' ? 1 : 0)"
+            :event-count="eventRecords.length"
+            :alarm-count="activeAlarmCount"
           />
         </aside>
       </section>
 
+      <DeviceManager :devices="deviceList" :can-configure="canConfigure" @add-device="handleDeviceAdd" />
+
       <DashboardStats :stats-data="dashboardStats" />
 
-      <section class="bottom-grid">
+      <section :class="['bottom-grid', canConfigure ? 'bottom-grid-3' : 'bottom-grid-2']">
         <HistoryQuery :cloud-server-url="CLOUD_SERVER_URL" />
-        <div class="bottom-stack">
-          <AlarmWorkbench :records="alarmDispositionRecords" />
-          <WhitelistManager v-if="canConfigure" @send-command="handleSendCommand" />
-        </div>
+        <AlarmWorkbench :records="alarmDispositionRecords" />
+        <WhitelistManager v-if="canConfigure" @send-command="handleSendCommand" />
       </section>
     </main>
   </div>
@@ -1006,6 +1011,8 @@ onUnmounted(() => {
   top: 0;
   z-index: 5;
   backdrop-filter: blur(18px);
+  overflow: visible;
+  white-space: nowrap;
 }
 
 .header-content {
@@ -1014,6 +1021,8 @@ onUnmounted(() => {
   justify-content: space-between;
   margin: 0 auto;
   max-width: 1680px;
+  width: 100%;
+  overflow: visible;
 }
 
 .brand {
@@ -1052,7 +1061,9 @@ onUnmounted(() => {
 .header-right {
   align-items: center;
   display: flex;
-  gap: 16px;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .time-block {
@@ -1167,6 +1178,30 @@ onUnmounted(() => {
   margin: 0 0 20px;
 }
 
+.login-footer {
+  align-items: center;
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(56, 189, 248, 0.14);
+}
+
+.login-footer span {
+  color: #93c5fd;
+  font-size: 13px;
+}
+
+.login-footer .el-button--text {
+  color: #67e8f9;
+  font-size: 13px;
+}
+
+.login-footer .el-button--text:hover {
+  color: #a5f3fc;
+}
+
 .scene-tabs-panel {
   align-items: center;
   background: linear-gradient(135deg, rgba(15, 23, 42, 0.92), rgba(15, 36, 62, 0.82));
@@ -1261,7 +1296,7 @@ onUnmounted(() => {
   display: grid;
   gap: 16px;
   grid-template-columns: 360px minmax(0, 1fr) 390px;
-  align-items: start;
+  align-items: stretch;
 }
 
 .left-rail,
@@ -1271,6 +1306,7 @@ onUnmounted(() => {
   flex-direction: column;
   gap: 16px;
   min-width: 0;
+  min-height: 0;
 }
 
 .video-section {
@@ -1450,13 +1486,15 @@ onUnmounted(() => {
 .bottom-grid {
   display: grid;
   gap: 16px;
-  grid-template-columns: minmax(0, 1.25fr) minmax(380px, 0.75fr);
   margin-top: 16px;
 }
 
-.bottom-stack {
-  display: grid;
-  gap: 16px;
+.bottom-grid-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.bottom-grid-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 @media (max-width: 1480px) {
@@ -1485,6 +1523,8 @@ onUnmounted(() => {
 
   .command-grid,
   .bottom-grid,
+  .bottom-grid-2,
+  .bottom-grid-3,
   .right-rail,
   .login-hero {
     grid-template-columns: 1fr;

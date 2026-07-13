@@ -205,7 +205,6 @@ watch(() => props.records.length, (newLen, oldLen) => {
   border-radius: 8px;
   padding: 16px;
   box-shadow: 0 18px 38px rgba(2, 8, 23, 0.36), inset 0 1px 0 rgba(255, 255, 255, 0.05);
-  margin-top: 16px;
 }
 
 .illegal-parking-alarm h3 {

@@ -123,6 +123,10 @@ const shortUrl = (url) => {
   box-shadow: 0 18px 38px rgba(2, 8, 23, 0.36), inset 0 1px 0 rgba(255, 255, 255, 0.05);
   color: #dbeafe;
   padding: 16px;
+  display: flex;
+  flex-direction: column;
+  flex-grow: 1;
+  min-height: 0;
 }
 
 .section-header {
@@ -131,6 +135,7 @@ const shortUrl = (url) => {
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 12px;
+  flex-shrink: 0;
 }
 
 .section-header h2 {
@@ -147,6 +152,10 @@ const shortUrl = (url) => {
 .check-list {
   display: grid;
   gap: 9px;
+  overflow: auto;
+  flex-grow: 1;
+  min-height: 0;
+  padding-right: 4px;
 }
 
 .check-item {
@@ -157,7 +166,8 @@ const shortUrl = (url) => {
   display: grid;
   gap: 10px;
   grid-template-columns: 10px 1fr;
-  padding: 9px 10px;
+  padding: 10px 12px;
+  min-height: 56px;
 }
 
 .check-dot {

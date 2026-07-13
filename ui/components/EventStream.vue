@@ -106,13 +106,7 @@ const getEventSummary = (event) => {
 
 <template>
   <section class="event-stream">
-    <div class="stream-header">
-      <div>
-        <h2>实时事件流</h2>
-        <p>{{ events.length }} 条消息 / {{ alarmCount }} 条告警</p>
-      </div>
-      <span>LIVE</span>
-    </div>
+    <h3>事件流</h3>
 
     <div class="stream-filters" aria-label="事件筛选">
       <button
@@ -153,33 +147,16 @@ const getEventSummary = (event) => {
   border-radius: 8px;
   padding: 16px;
   box-shadow: 0 18px 38px rgba(2, 8, 23, 0.36), inset 0 1px 0 rgba(255, 255, 255, 0.05);
-}
-
-.stream-header {
-  align-items: flex-start;
   display: flex;
-  justify-content: space-between;
-  margin-bottom: 12px;
+  flex-direction: column;
+  flex-shrink: 0;
+  height: 600px;
 }
 
-.stream-header h2 {
+.event-stream h3 {
+  font-size: 16px;
   color: #e0f2fe;
-  font-size: 17px;
-}
-
-.stream-header span {
-  border: 1px solid rgba(34, 211, 238, 0.28);
-  border-radius: 999px;
-  color: #67e8f9;
-  font-size: 12px;
-  font-weight: 800;
-  padding: 3px 8px;
-}
-
-.stream-header p {
-  color: #93c5fd;
-  font-size: 12px;
-  margin-top: 4px;
+  margin: 0 0 12px;
 }
 
 .stream-filters {
@@ -211,9 +188,9 @@ const getEventSummary = (event) => {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  max-height: 430px;
-  overflow: auto;
+  overflow-y: auto;
   padding-right: 4px;
+  flex-grow: 1;
 }
 
 .timeline-item {

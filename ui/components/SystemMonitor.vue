@@ -264,6 +264,8 @@ onUnmounted(() => {
   border-radius: 8px;
   padding: 16px;
   box-shadow: 0 18px 38px rgba(2, 8, 23, 0.36), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  flex-grow: 1;
+  min-height: 0;
 }
 
 .system-monitor h3 {

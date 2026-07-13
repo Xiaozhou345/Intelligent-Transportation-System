@@ -17,22 +17,26 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['login', 'logout', 'update:visible'])
+const emit = defineEmits(['login', 'logout', 'register', 'update:visible'])
 
 const roleMap = {
   admin: { label: '管理员', type: 'danger' },
-  operator: { label: '值班员', type: 'warning' },
-  viewer: { label: '访客', type: 'info' }
+  user: { label: '普通用户', type: 'info' }
 }
 
 const form = reactive({
-  username: 'operator',
-  role: 'operator'
+  username: 'user',
+  password: '',
+  role: 'user'
 })
 
 const submitLogin = () => {
+  if (!form.password) {
+    return
+  }
   emit('login', {
     username: form.username.trim() || 'operator',
+    password: form.password,
     role: form.role,
     loginAt: new Date().toISOString()
   })
@@ -50,6 +54,9 @@ const closeDialog = () => {
         <ElFormItem label="用户名">
           <ElInput v-model="form.username" maxlength="24" />
         </ElFormItem>
+        <ElFormItem label="密码">
+          <ElInput v-model="form.password" type="password" maxlength="32" placeholder="请输入密码" />
+        </ElFormItem>
         <ElFormItem label="角色">
           <ElSelect
             v-model="form.role"
@@ -59,8 +66,7 @@ const closeDialog = () => {
             fit-input-width
           >
             <ElOption label="管理员" value="admin" />
-            <ElOption label="值班员" value="operator" />
-            <ElOption label="访客" value="viewer" />
+            <ElOption label="普通用户" value="user" />
           </ElSelect>
         </ElFormItem>
         <ElButton type="primary" class="login-submit" @click="submitLogin">进入视频监控台</ElButton>
@@ -91,6 +97,9 @@ const closeDialog = () => {
         <ElFormItem label="用户名">
           <ElInput v-model="form.username" maxlength="24" />
         </ElFormItem>
+        <ElFormItem label="密码">
+          <ElInput v-model="form.password" type="password" maxlength="32" placeholder="请输入密码" />
+        </ElFormItem>
         <ElFormItem label="角色">
           <ElSelect
             v-model="form.role"
@@ -100,14 +109,18 @@ const closeDialog = () => {
             fit-input-width
           >
             <ElOption label="管理员" value="admin" />
-            <ElOption label="值班员" value="operator" />
-            <ElOption label="访客" value="viewer" />
+            <ElOption label="普通用户" value="user" />
           </ElSelect>
         </ElFormItem>
       </ElForm>
       <template #footer>
-        <ElButton @click="closeDialog">取消</ElButton>
-        <ElButton type="primary" @click="submitLogin">进入系统</ElButton>
+        <div class="login-dialog-footer">
+          <ElButton text @click="emit('register')">注册账号</ElButton>
+          <div class="login-dialog-actions">
+            <ElButton @click="closeDialog">取消</ElButton>
+            <ElButton type="primary" @click="submitLogin">进入系统</ElButton>
+          </div>
+        </div>
       </template>
     </ElDialog>
     </template>
@@ -213,5 +226,26 @@ const closeDialog = () => {
   border-color: var(--el-tag-border-color);
   color: var(--el-tag-text-color);
   font-weight: 600;
+}
+
+.login-dialog-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+}
+
+.login-dialog-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.login-dialog-footer .el-button--text {
+  color: #67e8f9;
+  font-size: 13px;
+}
+
+.login-dialog-footer .el-button--text:hover {
+  color: #a5f3fc;
 }
 </style>

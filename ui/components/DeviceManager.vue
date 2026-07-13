@@ -6,6 +6,10 @@ const props = defineProps({
   devices: {
     type: Array,
     default: () => []
+  },
+  canConfigure: {
+    type: Boolean,
+    default: false
   }
 })
 
@@ -80,7 +84,7 @@ watch(() => props.devices, (newDevices) => {
   <div class="device-manager">
     <div class="header">
       <h3>设备管理</h3>
-      <ElButton type="primary" size="small" @click="showAddDialog = true">
+      <ElButton v-if="canConfigure" type="primary" size="small" @click="showAddDialog = true">
         本地演示添加
       </ElButton>
     </div>
@@ -89,12 +93,11 @@ watch(() => props.devices, (newDevices) => {
       :data="displayDevices" 
       stripe 
       size="small" 
-      :max-height="300"
+      :max-height="200"
     >
-      <ElTableColumn prop="device_id" label="设备编号" width="120" />
-      <ElTableColumn prop="device_type" label="设备类型" width="120" />
-      <ElTableColumn prop="scene_id" label="场景编号" width="120" />
-      <ElTableColumn label="在线状态" width="100" align="center">
+      <ElTableColumn prop="device_id" label="设备编号" />
+      <ElTableColumn prop="device_type" label="设备类型" />
+      <ElTableColumn label="在线状态" align="center">
         <template #default="{ row }">
           <div class="status-cell">
             <span :class="['status-dot', getStatusClass(row.status)]"></span>
@@ -102,12 +105,12 @@ watch(() => props.devices, (newDevices) => {
           </div>
         </template>
       </ElTableColumn>
-      <ElTableColumn label="最后心跳" width="160" align="center">
+      <ElTableColumn label="最后心跳" align="center">
         <template #default="{ row }">
           {{ formatHeartbeat(row.last_heartbeat) }}
         </template>
       </ElTableColumn>
-      <ElTableColumn label="操作" width="80" align="center">
+      <ElTableColumn label="操作" align="center">
         <template #default="{ row }">
           <ElButton type="text" size="small" @click="handleViewDetail(row)">
             查看详情

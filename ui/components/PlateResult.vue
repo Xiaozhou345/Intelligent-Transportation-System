@@ -38,6 +38,7 @@ const decisionStatus = computed(() => {
 
 <template>
   <div class="plate-result-container">
+    <h3>车牌识别</h3>
     <ElCard title="最新识别结果" class="latest-card">
       <div v-if="latestResult" class="latest-info">
         <div class="info-row">
@@ -102,6 +103,17 @@ const decisionStatus = computed(() => {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.9), rgba(8, 18, 33, 0.92));
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  border-radius: 8px;
+  padding: 16px;
+  box-shadow: 0 18px 38px rgba(2, 8, 23, 0.36), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.plate-result-container h3 {
+  font-size: 16px;
+  color: #e0f2fe;
+  margin: 0 0 12px;
 }
 
 .latest-card {
