@@ -25,7 +25,6 @@ const eventOptions = [
   { label: '拥堵分析', value: 'traffic_density' },
   { label: '违停告警', value: 'illegal_parking' },
   { label: '道路异常', value: 'road_anomaly' },
-  { label: '画框快照', value: 'video_overlay' },
   { label: '告警处置', value: 'alarm_disposition' }
 ]
 
