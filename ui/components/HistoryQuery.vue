@@ -1,11 +1,11 @@
 <script setup>
-import { computed, reactive } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { ElTable, ElTableColumn, ElTag, ElSelect, ElOption, ElInput, ElButton } from 'element-plus'
 
 const props = defineProps({
-  events: {
-    type: Array,
-    default: () => []
+  cloudServerUrl: {
+    type: String,
+    required: true
   }
 })
 
@@ -14,6 +14,9 @@ const filters = reactive({
   keyword: '',
   status: ''
 })
+
+const events = ref([])
+const loading = ref(false)
 
 const eventOptions = [
   { label: '全部事件', value: '' },
@@ -48,10 +51,61 @@ const eventTypeText = {
   user_logout: '用户退出'
 }
 
+// 从后端加载历史数据
+const loadEvents = async () => {
+  loading.value = true
+  try {
+    const params = new URLSearchParams({ limit: '50' })
+    if (filters.eventType) {
+      params.append('event_type', filters.eventType)
+    }
+
+    const response = await fetch(`${props.cloudServerUrl}/api/history/events?${params}`)
+    if (response.ok) {
+      const data = await response.json()
+      if (data.status === 'success') {
+        // 转换数据格式
+        events.value = data.data.map(event => {
+          let parsedData = {}
+          if (typeof event.result_json === 'string') {
+            try {
+              parsedData = JSON.parse(event.result_json)
+            } catch (e) {
+              console.warn('解析 result_json 失败:', e)
+            }
+          } else if (event.result_json) {
+            parsedData = event.result_json
+          }
+
+          return {
+            event_type: event.event_type,
+            device_id: event.device_id,
+            timestamp: event.created_at,
+            status: parsedData.status || 'normal',
+            data: parsedData.data || parsedData,
+            plate_number: event.plate_number
+          }
+        })
+      }
+    }
+  } catch (error) {
+    console.error('加载历史数据失败:', error)
+  } finally {
+    loading.value = false
+  }
+}
+
+// 监听事件类型筛选变化，重新加载数据
+watch(() => filters.eventType, () => {
+  loadEvents()
+})
+
+// 组件挂载时加载初始数据
+loadEvents()
+
 const filteredEvents = computed(() => {
   const keyword = filters.keyword.trim().toLowerCase()
-  return props.events
-    .filter(event => !filters.eventType || event.event_type === filters.eventType)
+  return events.value
     .filter(event => !filters.status || event.status === filters.status)
     .filter(event => {
       if (!keyword) return true

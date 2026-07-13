@@ -959,7 +959,7 @@ onUnmounted(() => {
       <DashboardStats :stats-data="dashboardStats" />
 
       <section class="bottom-grid">
-        <HistoryQuery :events="eventRecords" />
+        <HistoryQuery :cloud-server-url="CLOUD_SERVER_URL" />
         <div class="bottom-stack">
           <AlarmWorkbench :records="alarmDispositionRecords" />
           <WhitelistManager v-if="canConfigure" @send-command="handleSendCommand" />
