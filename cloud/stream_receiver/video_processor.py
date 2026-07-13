@@ -231,7 +231,7 @@ class VideoProcessor:
                         model_name=os.getenv("ITS_DINO_MODEL", "dinov2_vits14_reg"),
                         image_size=int(os.getenv("ITS_DINO_IMAGE_SIZE", "518")),
                         local_radius=int(os.getenv("ITS_DINO_LOCAL_RADIUS", "1")),
-                        heat_threshold=float(os.getenv("ITS_DINO_HEAT_THRESHOLD", "0.18")),
+                        heat_threshold=float(os.getenv("ITS_DINO_HEAT_THRESHOLD", "0.14")),
                         pixel_threshold=float(os.getenv("ITS_DINO_PIXEL_THRESHOLD", "0.14")),
                         threshold_quantile=float(os.getenv("ITS_DINO_THRESHOLD_QUANTILE", "0.99")),
                         threshold_margin=float(os.getenv("ITS_DINO_THRESHOLD_MARGIN", "1.25")),
@@ -1866,12 +1866,14 @@ class VideoProcessor:
             return {"status": "error", "message": "道路异常检测器未启用"}
 
         targets = self._target_states(device_id)
-        background_frames = 0
+        background_frames = self.anomaly_processor.background_frames
         min_background_frames = int(self.runtime_defaults.get("anomaly_min_background_frames", 8))
         for state in targets:
-            background_frames = max(background_frames, state.get("anomaly_background_frames", 0))
+            # The detector owns the reference model. Keep per-device UI state in
+            # sync with that source of truth before accepting the mode switch.
+            state["anomaly_background_frames"] = background_frames
 
-        if targets and background_frames < min_background_frames:
+        if background_frames < min_background_frames:
             print(f"道路异常检测未启动，背景帧不足: {background_frames}/{min_background_frames}")
             return {
                 "status": "error",
@@ -1919,6 +1921,10 @@ class VideoProcessor:
             "last_background_vehicle_ratio",
             "last_background_valid_ratio",
             "last_background_skip_reason",
+            "last_detection_reason",
+            "last_candidate_count",
+            "last_warning_count",
+            "last_vehicle_mask_ratio",
             "model_warmed_up",
             "model_warmup_ms",
         ):
@@ -1928,13 +1934,17 @@ class VideoProcessor:
         return payload
 
     def get_anomaly_status(self, device_id=None):
+        actual_background_frames = (
+            self.anomaly_processor.background_frames if self.anomaly_processor else 0
+        )
         if device_id and device_id in self.runtime_state:
             state = self.runtime_state[device_id]
+            state["anomaly_background_frames"] = actual_background_frames
             return {
                 "status": "success",
                 "device_id": device_id,
                 "mode": state.get("anomaly_mode", "detecting"),
-                "background_frames": state.get("anomaly_background_frames", 0),
+                "background_frames": actual_background_frames,
                 "skipped_frames": state.get("anomaly_background_skipped_frames", 0),
                 "min_background_frames": int(self.runtime_defaults.get("anomaly_min_background_frames", 8)),
                 "active_scene": state.get("active_scene"),
@@ -1946,20 +1956,18 @@ class VideoProcessor:
         # 前端刷新后使用 runtime_defaults 中的旧场景。
         if self.runtime_state:
             first_device_id, state = next(iter(self.runtime_state.items()))
+            state["anomaly_background_frames"] = actual_background_frames
             return {
                 "status": "success",
                 "device_id": first_device_id,
                 "mode": state.get("anomaly_mode", "detecting"),
-                "background_frames": state.get("anomaly_background_frames", 0),
+                "background_frames": actual_background_frames,
                 "skipped_frames": state.get("anomaly_background_skipped_frames", 0),
                 "min_background_frames": int(self.runtime_defaults.get("anomaly_min_background_frames", 8)),
                 "active_scene": state.get("active_scene"),
                 "enabled": self.anomaly_processor is not None,
                 **self._anomaly_backend_status(),
             }
-
-        # 使用anomaly_processor内部的真实计数器，确保准确性
-        actual_background_frames = self.anomaly_processor.background_frames if self.anomaly_processor else 0
 
         return {
             "status": "success",

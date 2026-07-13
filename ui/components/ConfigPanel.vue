@@ -75,7 +75,7 @@ const handleAnomalyBackgroundStart = () => {
 const handleAnomalyDetectionStart = () => {
   config.scene = 'road_anomaly'
   sendCommand('anomaly_detection_start')
-  ElMessage.success('已切换到异常检测模式')
+  ElMessage.info('检测启动指令已发送')
 }
 
 const handleAnomalyReset = () => {
