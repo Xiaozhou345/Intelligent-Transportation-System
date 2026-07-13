@@ -208,7 +208,7 @@ class VideoProcessor:
         config_path = Path(CURRENT_DIR) / "illegal_parking_config.json"
         defaults = {
             "traffic_regions": [],
-            "traffic_thresholds": {"smooth_max": 2, "slow_max": 5},
+            "traffic_thresholds": {"smooth_max": 2, "slow_max": 5, "congestion_max": 10},
             "no_parking_zones": [],
             "parking_stationary_pixel_threshold": 18,
             "parking_release_grace_frames": 3,
@@ -233,7 +233,9 @@ class VideoProcessor:
         db_config = mysql_client.load_system_config()
         if db_config:
             if 'traffic_thresholds' in db_config:
-                defaults['traffic_thresholds'] = db_config['traffic_thresholds']
+                thresholds = dict(defaults.get('traffic_thresholds', {}))
+                thresholds.update(db_config['traffic_thresholds'] or {})
+                defaults['traffic_thresholds'] = thresholds
             if 'no_parking_zone_default' in db_config:
                 defaults['no_parking_zones'] = db_config['no_parking_zone_default']
             print("✅ 已从 MySQL system_config 加载运行时配置")
@@ -457,7 +459,7 @@ class VideoProcessor:
                 "traffic_regions": [],
                 "no_parking_zones": [],
                 "anomaly_road_roi": [],
-                "traffic_thresholds": dict(self.runtime_defaults.get("traffic_thresholds", {"smooth_max": 2, "slow_max": 5})),
+                "traffic_thresholds": dict(self.runtime_defaults.get("traffic_thresholds", {"smooth_max": 2, "slow_max": 5, "congestion_max": 10})),
                 "density_emit_every_processed_frames": int(self.runtime_defaults.get("density_emit_every_processed_frames", 3)),
                 "processed_frames": 0,
                 "active_scene": self._resolve_scene_for_device(device_id),
@@ -1735,6 +1737,20 @@ class VideoProcessor:
                 f"总耗时: {total_time:.2f}ms"
             )
 
+    @staticmethod
+    def _traffic_status_for_count(count, thresholds):
+        smooth_max = int(thresholds.get("smooth_max", 2))
+        slow_max = int(thresholds.get("slow_max", 5))
+        congestion_max = int(thresholds.get("congestion_max", 10))
+
+        if count <= smooth_max:
+            return "smooth", "green"
+        if count <= slow_max:
+            return "slow", "orange"
+        if count <= congestion_max:
+            return "congested", "red"
+        return "severe", "purple"
+
     def _build_traffic_density_event(self, device_id, state, tracked_vehicles, timestamp):
         """
         构建基于车道的交通流量热力图事件
@@ -1743,7 +1759,7 @@ class VideoProcessor:
         1. 检测画面中的车道分隔线（白色标线）
         2. 根据车道线将画面划分为多个车道
         3. 统计每个车道的车辆数量
-        4. 拥堵等级：1辆=绿色，2-3辆=橙色，>3辆=红色
+        4. 按管理员配置的车辆数阈值计算拥堵等级
         """
         emit_every = max(1, int(state.get("density_emit_every_processed_frames", 3)))
         if state["processed_frames"] % emit_every != 0:
@@ -1755,6 +1771,7 @@ class VideoProcessor:
             return None
 
         height, width = frame_shape[:2]
+        traffic_thresholds = state.get("traffic_thresholds", self.runtime_defaults.get("traffic_thresholds", {}))
 
         # 获取当前帧（用于车道线检测）
         current_frame = state.get("current_frame")
@@ -1777,15 +1794,7 @@ class VideoProcessor:
                 }
 
             # 判断整体拥堵等级
-            if total_count <= 2:
-                status = "smooth"
-                color = "green"
-            elif 3 <= total_count <= 5:
-                status = "slow"
-                color = "orange"
-            else:  # total_count > 5
-                status = "congested"
-                color = "red"
+            status, color = self._traffic_status_for_count(total_count, traffic_thresholds)
 
             # 整个画面作为一个区域
             polygon = [
@@ -1859,19 +1868,7 @@ class VideoProcessor:
 
             # 修复：显示所有车道，包括空车道（改善用户体验，让用户看到完整的车道划分）
             # 判断拥堵等级
-            if count == 0:
-                # 空车道也显示，使用透明的绿色或不显示（取决于前端实现）
-                status = "smooth"
-                color = "green"
-            elif count == 1:
-                status = "smooth"
-                color = "green"
-            elif 2 <= count <= 3:
-                status = "slow"
-                color = "orange"  # 橙色
-            else:  # count > 3
-                status = "congested"
-                color = "red"
+            status, color = self._traffic_status_for_count(count, traffic_thresholds)
 
             # 车道区域多边形（覆盖整个画面高度）
             polygon = [
@@ -2299,6 +2296,29 @@ class VideoProcessor:
 
         return frame
 
+    def get_traffic_thresholds(self, device_id=None):
+        if device_id and device_id in self.runtime_state:
+            thresholds = self.runtime_state[device_id].get("traffic_thresholds", {})
+        else:
+            thresholds = self.runtime_defaults.get("traffic_thresholds", {})
+        return {
+            "smoothMax": int(thresholds.get("smooth_max", 2)),
+            "slowMax": int(thresholds.get("slow_max", 5)),
+            "congestionMax": int(thresholds.get("congestion_max", 10)),
+        }
+
+    def get_parking_threshold(self, device_id=None):
+        targets = [self.runtime_state[device_id]] if device_id and device_id in self.runtime_state else self.runtime_state.values()
+        for state in targets:
+            zones = state.get("no_parking_zones", [])
+            if zones:
+                return float(zones[0].get("threshold_seconds", 30))
+
+        zones = self.runtime_defaults.get("no_parking_zones", [])
+        if zones:
+            return float(zones[0].get("threshold_seconds", 30))
+        return 30.0
+
     def set_parking_threshold(self, threshold_seconds, device_id=None):
         threshold_seconds = float(threshold_seconds)
         self.runtime_defaults.setdefault("no_parking_zones", [])
@@ -2380,15 +2400,16 @@ class VideoProcessor:
             # 业务阈值参数
             if 'smoothMax' in config_data or 'slowMax' in config_data or 'congestionMax' in config_data:
                 thresholds = self.runtime_defaults.setdefault('traffic_thresholds', {})
-                if 'smoothMax' in config_data:
-                    thresholds['smooth_max'] = int(config_data['smoothMax'])
-                    print(f"✅ 更新畅通阈值: {thresholds['smooth_max']}")
-                if 'slowMax' in config_data:
-                    thresholds['slow_max'] = int(config_data['slowMax'])
-                    print(f"✅ 更新缓行阈值: {thresholds['slow_max']}")
-                if 'congestionMax' in config_data:
-                    thresholds['congestion_max'] = int(config_data['congestionMax'])
-                    print(f"✅ 更新拥堵阈值: {thresholds['congestion_max']}")
+                smooth_max = int(config_data.get('smoothMax', thresholds.get('smooth_max', 2)))
+                slow_max = int(config_data.get('slowMax', thresholds.get('slow_max', 5)))
+                congestion_max = int(config_data.get('congestionMax', thresholds.get('congestion_max', 10)))
+                slow_max = max(slow_max, smooth_max + 1)
+                congestion_max = max(congestion_max, slow_max + 1)
+
+                thresholds['smooth_max'] = smooth_max
+                thresholds['slow_max'] = slow_max
+                thresholds['congestion_max'] = congestion_max
+                print(f"✅ 更新拥堵热力图阈值: 畅通≤{smooth_max}, 缓行≤{slow_max}, 拥堵≤{congestion_max}, 严重拥堵>{congestion_max}")
 
                 # 更新所有设备的运行时配置
                 for state in self.runtime_state.values():

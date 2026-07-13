@@ -800,7 +800,7 @@ onUnmounted(() => {
             @logout="handleLogout"
             @register="showRegisterDialog = true"
           />
-          <ConfigPanel v-if="canConfigure" @send-command="handleSendCommand" />
+          <ConfigPanel v-if="canConfigure" :server-url="CLOUD_SERVER_URL" @send-command="handleSendCommand" />
           <ElTag v-else type="info" size="large">只读模式</ElTag>
           <RegisterPanel v-model:visible="showRegisterDialog" @register="handleRegister" />
         </div>

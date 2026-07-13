@@ -1,33 +1,109 @@
 <script setup>
-import { ref, reactive } from 'vue'
+import { ref, reactive, watch } from 'vue'
 import { ElInputNumber, ElButton, ElDialog, ElMessage, ElTabs, ElTabPane } from 'element-plus'
+
+const props = defineProps({
+  serverUrl: {
+    type: String,
+    required: true
+  }
+})
 
 const emit = defineEmits(['send-command'])
 
 const showDialog = ref(false)
 const currentTab = ref('detection')
+const loadingConfig = ref(false)
 
 const defaultConfig = {
   detection: {
     vehicleConf: 0.5,
-    plateConf: 0.2,
-    iouThresh: 0.45
+    plateConf: 0.2
   },
   tracking: {
-    trackThresh: 0.5,
-    matchThresh: 0.8,
-    maxTimeLost: 30,
     parkingThreshold: 30
   },
   business: {
-    smoothMax: 3,
-    slowMax: 6,
-    congestionMax: 10,
-    anomalyStaticFrames: 3
+    smoothMax: 2,
+    slowMax: 5,
+    congestionMax: 10
   }
 }
 
 const config = reactive(JSON.parse(JSON.stringify(defaultConfig)))
+
+const resolveNumber = (value, fallback) => {
+  return value !== undefined && value !== null ? Number(value) : fallback
+}
+
+const resolveDetectionConfig = (systemConfig) => {
+  const runtime = systemConfig?.runtime || {}
+  return {
+    vehicleConf: resolveNumber(runtime.vehicleConf, defaultConfig.detection.vehicleConf),
+    plateConf: resolveNumber(runtime.plateConf, defaultConfig.detection.plateConf)
+  }
+}
+
+const resolveTrafficThresholds = (systemConfig) => {
+  const runtimeThresholds = systemConfig?.runtime?.trafficThresholds || {}
+  const storedThresholds = systemConfig?.traffic_thresholds || {}
+  return {
+    smoothMax: resolveNumber(runtimeThresholds.smoothMax ?? storedThresholds.smooth_max, defaultConfig.business.smoothMax),
+    slowMax: resolveNumber(runtimeThresholds.slowMax ?? storedThresholds.slow_max, defaultConfig.business.slowMax),
+    congestionMax: resolveNumber(runtimeThresholds.congestionMax ?? storedThresholds.congestion_max, defaultConfig.business.congestionMax)
+  }
+}
+
+const resolveParkingThreshold = (systemConfig) => {
+  const runtimeThreshold = systemConfig?.runtime?.parkingThreshold
+  if (runtimeThreshold !== undefined && runtimeThreshold !== null) {
+    return Number(runtimeThreshold)
+  }
+
+  const zones = systemConfig?.no_parking_zone_default || systemConfig?.no_parking_zones || []
+  const threshold = zones[0]?.threshold_seconds
+  return threshold !== undefined && threshold !== null ? Number(threshold) : defaultConfig.tracking.parkingThreshold
+}
+
+const loadBackendConfig = async () => {
+  loadingConfig.value = true
+  try {
+    const response = await fetch(`${props.serverUrl}/api/config?t=${Date.now()}`, { cache: 'no-store' })
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`)
+    }
+
+    const result = await response.json()
+    if (result.status !== 'success') {
+      throw new Error(result.message || '配置读取失败')
+    }
+
+    const detectionConfig = resolveDetectionConfig(result.data)
+    config.detection.vehicleConf = detectionConfig.vehicleConf
+    config.detection.plateConf = detectionConfig.plateConf
+    Object.assign(defaultConfig.detection, detectionConfig)
+
+    const trafficThresholds = resolveTrafficThresholds(result.data)
+    Object.assign(config.business, trafficThresholds)
+    Object.assign(defaultConfig.business, trafficThresholds)
+
+    const parkingThreshold = resolveParkingThreshold(result.data)
+    config.tracking.parkingThreshold = parkingThreshold
+    defaultConfig.tracking.parkingThreshold = parkingThreshold
+    console.log('✅ 已同步后端配置:', { ...detectionConfig, ...trafficThresholds, parkingThreshold })
+  } catch (error) {
+    console.warn('⚠️ 读取后端配置失败，使用本地默认值:', error.message)
+    ElMessage.warning('读取后端配置失败，已使用本地默认值')
+  } finally {
+    loadingConfig.value = false
+  }
+}
+
+watch(showDialog, (visible) => {
+  if (visible) {
+    loadBackendConfig()
+  }
+})
 
 const sendCommand = (command, data = {}) => {
   const payload = { command, ...data }
@@ -36,8 +112,15 @@ const sendCommand = (command, data = {}) => {
 }
 
 const handleSaveConfig = (tabKey) => {
+  if (tabKey === 'business') {
+    config.business.smoothMax = Number(config.business.smoothMax)
+    config.business.slowMax = Math.max(Number(config.business.slowMax), config.business.smoothMax + 1)
+    config.business.congestionMax = Math.max(Number(config.business.congestionMax), config.business.slowMax + 1)
+  }
+
   const configData = config[tabKey]
   sendCommand('update_config', { config_type: tabKey, data: configData })
+  Object.assign(defaultConfig[tabKey], configData)
   ElMessage.success('配置已更新')
 }
 
@@ -74,15 +157,8 @@ const handleResetConfig = (tabKey) => {
               <div class="form-item">
                 <span class="form-label">车辆检测置信度</span>
                 <div class="form-content">
-                  <input type="range" v-model.number="config.detection.vehicleConf" min="0.1" max="0.9" step="0.05" class="config-slider" />
+                  <input type="range" v-model.number="config.detection.vehicleConf" min="0.1" max="0.9" step="0.05" class="config-slider" :disabled="loadingConfig" />
                   <span class="slider-value">{{ config.detection.vehicleConf.toFixed(2) }}</span>
-                </div>
-              </div>
-              <div class="form-item">
-                <span class="form-label">NMS非极大抑制阈值</span>
-                <div class="form-content">
-                  <input type="range" v-model.number="config.detection.iouThresh" min="0.1" max="0.9" step="0.05" class="config-slider" />
-                  <span class="slider-value">{{ config.detection.iouThresh.toFixed(2) }}</span>
                 </div>
               </div>
             </div>
@@ -94,15 +170,15 @@ const handleResetConfig = (tabKey) => {
               <div class="form-item">
                 <span class="form-label">车牌检测置信度</span>
                 <div class="form-content">
-                  <input type="range" v-model.number="config.detection.plateConf" min="0.05" max="0.5" step="0.05" class="config-slider" />
+                  <input type="range" v-model.number="config.detection.plateConf" min="0.05" max="0.5" step="0.05" class="config-slider" :disabled="loadingConfig" />
                   <span class="slider-value">{{ config.detection.plateConf.toFixed(2) }}</span>
                 </div>
               </div>
             </div>
 
             <div class="config-actions">
-              <ElButton type="primary" @click="handleSaveConfig('detection')">保存配置</ElButton>
-              <ElButton @click="handleResetConfig('detection')">重置默认</ElButton>
+              <ElButton type="primary" :loading="loadingConfig" @click="handleSaveConfig('detection')">保存配置</ElButton>
+              <ElButton :disabled="loadingConfig" @click="handleResetConfig('detection')">重置默认</ElButton>
             </div>
           </div>
         </ElTabPane>
@@ -110,46 +186,20 @@ const handleResetConfig = (tabKey) => {
         <ElTabPane label="跟踪算法参数" name="tracking">
           <div class="tab-content">
             <div class="section-title">
-              <span>ByteTrack跟踪参数</span>
-            </div>
-            <div class="config-form">
-              <div class="form-item">
-                <span class="form-label">高置信度匹配阈值</span>
-                <div class="form-content">
-                  <input type="range" v-model.number="config.tracking.trackThresh" min="0.3" max="0.9" step="0.05" class="config-slider" />
-                  <span class="slider-value">{{ config.tracking.trackThresh.toFixed(2) }}</span>
-                </div>
-              </div>
-              <div class="form-item">
-                <span class="form-label">低置信度匹配阈值</span>
-                <div class="form-content">
-                  <input type="range" v-model.number="config.tracking.matchThresh" min="0.5" max="0.95" step="0.05" class="config-slider" />
-                  <span class="slider-value">{{ config.tracking.matchThresh.toFixed(2) }}</span>
-                </div>
-              </div>
-              <div class="form-item">
-                <span class="form-label">目标丢失最大存活帧数</span>
-                <div class="form-content">
-                  <ElInputNumber v-model="config.tracking.maxTimeLost" :min="10" :max="100" style="width: 150px" />
-                </div>
-              </div>
-            </div>
-
-            <div class="section-title">
               <span>违停监控参数</span>
             </div>
             <div class="config-form">
               <div class="form-item">
                 <span class="form-label">违停判定停留时长(秒)</span>
                 <div class="form-content">
-                  <ElInputNumber v-model="config.tracking.parkingThreshold" :min="1" :max="300" style="width: 150px" />
+                  <ElInputNumber v-model="config.tracking.parkingThreshold" :min="1" :max="300" :disabled="loadingConfig" style="width: 150px" />
                 </div>
               </div>
             </div>
 
             <div class="config-actions">
-              <ElButton type="primary" @click="handleSaveConfig('tracking')">保存配置</ElButton>
-              <ElButton @click="handleResetConfig('tracking')">重置默认</ElButton>
+              <ElButton type="primary" :loading="loadingConfig" @click="handleSaveConfig('tracking')">保存配置</ElButton>
+              <ElButton :disabled="loadingConfig" @click="handleResetConfig('tracking')">重置默认</ElButton>
             </div>
           </div>
         </ElTabPane>
@@ -163,39 +213,26 @@ const handleResetConfig = (tabKey) => {
               <div class="form-item">
                 <span class="form-label">畅通阈值(车辆数)</span>
                 <div class="form-content">
-                  <ElInputNumber v-model="config.business.smoothMax" :min="1" :max="10" style="width: 150px" />
+                  <ElInputNumber v-model="config.business.smoothMax" :min="1" :max="10" :disabled="loadingConfig" style="width: 150px" />
                 </div>
               </div>
               <div class="form-item">
                 <span class="form-label">缓行阈值(车辆数)</span>
                 <div class="form-content">
-                  <ElInputNumber v-model="config.business.slowMax" :min="3" :max="15" style="width: 150px" />
+                  <ElInputNumber v-model="config.business.slowMax" :min="config.business.smoothMax + 1" :max="15" :disabled="loadingConfig" style="width: 150px" />
                 </div>
               </div>
               <div class="form-item">
                 <span class="form-label">拥堵阈值(车辆数)</span>
                 <div class="form-content">
-                  <ElInputNumber v-model="config.business.congestionMax" :min="5" :max="20" style="width: 150px" />
-                </div>
-              </div>
-            </div>
-
-            <div class="section-title">
-              <span>异常检测阈值</span>
-            </div>
-            <div class="config-form">
-              <div class="form-item">
-                <span class="form-label">异常触发连续帧</span>
-                <div class="form-content">
-                  <ElInputNumber v-model="config.business.anomalyStaticFrames" :min="1" :max="10" style="width: 150px" />
-                  <span class="input-hint">目标持续N帧才告警</span>
+                  <ElInputNumber v-model="config.business.congestionMax" :min="config.business.slowMax + 1" :max="20" :disabled="loadingConfig" style="width: 150px" />
                 </div>
               </div>
             </div>
 
             <div class="config-actions">
-              <ElButton type="primary" @click="handleSaveConfig('business')">保存配置</ElButton>
-              <ElButton @click="handleResetConfig('business')">重置默认</ElButton>
+              <ElButton type="primary" :loading="loadingConfig" @click="handleSaveConfig('business')">保存配置</ElButton>
+              <ElButton :disabled="loadingConfig" @click="handleResetConfig('business')">重置默认</ElButton>
             </div>
           </div>
         </ElTabPane>

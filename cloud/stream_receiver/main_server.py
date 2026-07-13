@@ -714,6 +714,13 @@ def get_system_config():
         from database import mysql_client
 
         config = mysql_client.load_system_config()
+        device_id = request.args.get('device_id')
+        config['runtime'] = {
+            'parkingThreshold': video_processor.get_parking_threshold(device_id=device_id),
+            'vehicleConf': video_processor.vehicle_conf,
+            'plateConf': video_processor.plate_conf,
+            'trafficThresholds': video_processor.get_traffic_thresholds(device_id=device_id)
+        }
 
         return jsonify({
             "status": "success",

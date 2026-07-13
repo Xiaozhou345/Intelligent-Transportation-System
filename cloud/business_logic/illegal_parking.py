@@ -88,6 +88,21 @@ class IllegalParkingMonitor:
         if not hasattr(self, '_update_call_count'):
             self._update_call_count = 0
         self._update_call_count += 1
+
+        # 第一次调用时输出zone详细配置
+        if self._update_call_count == 1:
+            print(f"🚨🚨 违停监控首次调用诊断:")
+            print(f"   - 共配置 {len(self.zones)} 个禁停区")
+            for i, zone in enumerate(self.zones):
+                polygon = zone.get('polygon', [])
+                threshold = zone.get('threshold_seconds', 30)
+                print(f"   - 禁停区{i}: 阈值={threshold}s")
+                if polygon:
+                    xs = [int(point[0]) for point in polygon]
+                    ys = [int(point[1]) for point in polygon]
+                    print(f"     多边形坐标(像素): {[(int(x), int(y)) for x, y in polygon]}")
+                    print(f"     边界范围: X[{min(xs)}-{max(xs)}] Y[{min(ys)}-{max(ys)}]")
+
         if self._update_call_count % 30 == 0:
             print(f"🚨 illegal_parking.update() 第{self._update_call_count}次调用, 收到 {len(tracked_vehicles)} 辆跟踪车辆, 配置了 {len(self.zones)} 个禁停区")
 
