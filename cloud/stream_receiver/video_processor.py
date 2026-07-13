@@ -248,6 +248,10 @@ class VideoProcessor:
                         **dino_detector_kwargs,
                     )
                     self.anomaly_backend = "dino_reference"
+                    self.runtime_defaults["anomaly_min_background_frames"] = max(
+                        2,
+                        int(os.getenv("ITS_DINO_MIN_BACKGROUND_FRAMES", "6")),
+                    )
                     print("✅ 道路异常后端: DINOv2固定机位参考特征")
                 except Exception as dino_exc:
                     print(f"⚠️  DINOv2异常后端加载失败，回退MOG2: {dino_exc}")
@@ -1915,6 +1919,8 @@ class VideoProcessor:
             "last_background_vehicle_ratio",
             "last_background_valid_ratio",
             "last_background_skip_reason",
+            "model_warmed_up",
+            "model_warmup_ms",
         ):
             if hasattr(detector, field):
                 value = getattr(detector, field)

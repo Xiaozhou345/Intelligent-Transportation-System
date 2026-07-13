@@ -394,6 +394,21 @@ class DinoReferenceDetectorTest(unittest.TestCase):
         self.assertEqual(1, detector.background_frames)
         self.assertGreaterEqual(detector.last_background_valid_ratio, 0.99)
 
+    def test_reference_warmup_does_not_create_background_reference(self):
+        detector = DinoReferenceDetector(
+            feature_extractor=self.fake_features,
+            device="cpu",
+            use_default_road_scope=False,
+        )
+
+        elapsed_ms = detector.warmup()
+
+        self.assertIsNotNone(elapsed_ms)
+        self.assertTrue(detector.model_warmed_up)
+        self.assertEqual(0, detector.background_frames)
+        self.assertIsNone(detector.reference_sum)
+        self.assertIsNone(detector.reference_count)
+
 
 if __name__ == "__main__":
     unittest.main()

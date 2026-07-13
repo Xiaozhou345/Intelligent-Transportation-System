@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import nullcontext
 import os
 from pathlib import Path
+import time
 from typing import Callable
 
 import cv2
@@ -84,11 +85,15 @@ class DinoReferenceDetector(AnomalyDetector):
         self.last_background_vehicle_ratio = 0.0
         self.last_background_valid_ratio = 0.0
         self.last_background_skip_reason = None
+        self.model_warmed_up = self.feature_extractor is not None
+        self.model_warmup_ms = 0.0
 
         if self.feature_extractor is None and self.model is None:
             self.model = self._load_model()
         if self.model is not None:
             self.model.eval().to(self.device)
+            if os.getenv("ITS_WARMUP_MODELS", "true").lower() == "true":
+                self.warmup()
 
         print(
             "道路异常检测器初始化完成：DINOv2正常模板 + YOLO车辆掩膜 "
@@ -108,6 +113,30 @@ class DinoReferenceDetector(AnomalyDetector):
             trust_repo=True,
             force_reload=False,
         )
+
+    def warmup(self):
+        """Run first-use kernels before interactive background calibration."""
+        started_at = time.perf_counter()
+        warmup_width = max(32, int(os.getenv("ITS_WARMUP_WIDTH", "1280")))
+        warmup_height = max(32, int(os.getenv("ITS_WARMUP_HEIGHT", "720")))
+        dummy = np.zeros((warmup_height, warmup_width, 3), dtype=np.uint8)
+        try:
+            features = self._extract_features(dummy)
+            self._local_cosine_distance(features, features)
+            if self.device.type == "cuda":
+                torch.cuda.synchronize(self.device)
+            self.model_warmup_ms = (time.perf_counter() - started_at) * 1000
+            self.model_warmed_up = True
+            print(
+                f"DINOv2异常检测预热完成: {self.model_warmup_ms:.1f}ms "
+                f"(设备: {self.device.type}, 输入: {self.image_size}x{self.image_size})"
+            )
+            return self.model_warmup_ms
+        except Exception as exc:
+            self.model_warmed_up = False
+            self.model_warmup_ms = 0.0
+            print(f"DINOv2异常检测预热失败，将在首帧重试: {exc}")
+            return None
 
     def _extract_features(self, frame):
         if self.feature_extractor is not None:
