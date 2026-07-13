@@ -11,8 +11,7 @@ const props = defineProps({
 
 const filters = reactive({
   eventType: '',
-  keyword: '',
-  status: ''
+  keyword: ''
 })
 
 const events = ref([])
@@ -26,14 +25,6 @@ const eventOptions = [
   { label: '违停告警', value: 'illegal_parking' },
   { label: '道路异常', value: 'road_anomaly' },
   { label: '告警处置', value: 'alarm_disposition' }
-]
-
-const statusOptions = [
-  { label: '全部状态', value: '' },
-  { label: '正常', value: 'normal' },
-  { label: '告警', value: 'warning' },
-  { label: '已确认', value: 'acknowledged' },
-  { label: '已解除', value: 'resolved' }
 ]
 
 const eventTypeText = {
@@ -105,7 +96,6 @@ loadEvents()
 const filteredEvents = computed(() => {
   const keyword = filters.keyword.trim().toLowerCase()
   return events.value
-    .filter(event => !filters.status || event.status === filters.status)
     .filter(event => {
       if (!keyword) return true
       return JSON.stringify(event).toLowerCase().includes(keyword)
@@ -116,7 +106,6 @@ const filteredEvents = computed(() => {
 const resetFilters = () => {
   filters.eventType = ''
   filters.keyword = ''
-  filters.status = ''
 }
 
 const downloadFile = (filename, content, mimeType) => {
@@ -258,9 +247,6 @@ const formatDetail = (event) => {
       <ElSelect v-model="filters.eventType" size="small" class="filter-control" placeholder="事件类型">
         <ElOption v-for="option in eventOptions" :key="option.value" :label="option.label" :value="option.value" />
       </ElSelect>
-      <ElSelect v-model="filters.status" size="small" class="filter-control" placeholder="事件状态">
-        <ElOption v-for="option in statusOptions" :key="option.value" :label="option.label" :value="option.value" />
-      </ElSelect>
       <ElInput v-model="filters.keyword" size="small" placeholder="车牌、设备、车道关键字" clearable />
       <ElButton size="small" @click="resetFilters">重置</ElButton>
     </div>
@@ -277,13 +263,6 @@ const formatDetail = (event) => {
       <ElTableColumn label="设备" width="110" prop="device_id" />
       <ElTableColumn label="详情">
         <template #default="{ row }">{{ formatDetail(row) }}</template>
-      </ElTableColumn>
-      <ElTableColumn label="状态" width="90" align="center">
-        <template #default="{ row }">
-          <ElTag :type="row.status === 'warning' ? 'danger' : row.status === 'resolved' ? 'success' : 'info'" size="small">
-            {{ row.status || 'normal' }}
-          </ElTag>
-        </template>
       </ElTableColumn>
     </ElTable>
   </section>
@@ -324,7 +303,7 @@ const formatDetail = (event) => {
 
 .filters {
   display: grid;
-  grid-template-columns: 130px 120px 1fr 72px;
+  grid-template-columns: 130px 1fr 72px;
   gap: 8px;
   margin-bottom: 12px;
 }
