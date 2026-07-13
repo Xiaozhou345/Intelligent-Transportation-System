@@ -1191,7 +1191,7 @@ onUnmounted(() => {
 .overview-strip {
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   margin-bottom: 16px;
 }
 
@@ -1453,7 +1453,7 @@ onUnmounted(() => {
 
 @media (max-width: 1480px) {
   .overview-strip {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(6, minmax(0, 1fr));
   }
 
   .command-grid {
@@ -1483,7 +1483,7 @@ onUnmounted(() => {
   }
 
   .overview-strip {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(6, minmax(0, 1fr));
     gap: 8px;
   }
 
