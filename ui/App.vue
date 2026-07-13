@@ -831,11 +831,6 @@ onUnmounted(() => {
           <em>{{ connectionQuality.text }}</em>
         </div>
         <div class="overview-card">
-          <span>事件总量</span>
-          <strong>{{ eventRecords.length }}</strong>
-          <em>最新 {{ latestEventTime }}</em>
-        </div>
-        <div class="overview-card">
           <span>通行识别</span>
           <strong>{{ dashboardStats.plateCount }}</strong>
           <em>车牌比对结果</em>
