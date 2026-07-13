@@ -23,9 +23,9 @@
       }
     ],
     "traffic_thresholds": {
-      "smooth_max": 2,
-      "slow_max": 5,
-      "congestion_max": 10
+      "smooth_max": 1,
+      "slow_max": 3,
+      "congestion_max": 4
     },
     "no_parking_zones": [
       {

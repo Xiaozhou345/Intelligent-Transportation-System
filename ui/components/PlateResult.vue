@@ -39,8 +39,9 @@ const decisionStatus = computed(() => {
 <template>
   <div class="plate-result-container">
     <h3>车牌识别</h3>
-    <ElCard title="最新识别结果" class="latest-card">
+    <ElCard title="最近一次识别事件" class="latest-card">
       <div v-if="latestResult" class="latest-info">
+        <div class="info-hint">说明：此处显示最近一次推送到前端的车牌识别事件，不代表当前帧实时结果。</div>
         <div class="info-row">
           <span class="label">车牌号：</span>
           <span class="value plate-number">{{ latestResult.data?.plate_number || '-' }}</span>
@@ -54,16 +55,16 @@ const decisionStatus = computed(() => {
           <ElTag :type="decisionStatus.type" size="small">{{ decisionStatus.text }}</ElTag>
         </div>
         <div class="info-row">
-          <span class="label">识别时间：</span>
+          <span class="label">事件时间：</span>
           <span class="value">{{ formatTime(latestResult.timestamp) }}</span>
         </div>
       </div>
       <div v-else class="no-data">
-        暂无识别结果
+        暂无识别事件
       </div>
     </ElCard>
 
-    <ElCard title="识别记录（最近10条）" class="records-card">
+    <ElCard title="识别记录（最近10条事件）" class="records-card">
       <ElTable :data="records" stripe size="small" :max-height="300">
         <ElTableColumn type="index" label="序号" width="60" align="center" />
         <ElTableColumn label="车牌号" width="120">
@@ -135,6 +136,16 @@ const decisionStatus = computed(() => {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.info-hint {
+  color: #93c5fd;
+  font-size: 12px;
+  line-height: 1.6;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(14, 165, 233, 0.08);
+  border: 1px solid rgba(56, 189, 248, 0.16);
 }
 
 .info-row {

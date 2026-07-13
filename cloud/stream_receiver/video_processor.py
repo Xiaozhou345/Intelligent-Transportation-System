@@ -215,7 +215,7 @@ class VideoProcessor:
         config_path = Path(CURRENT_DIR) / "illegal_parking_config.json"
         defaults = {
             "traffic_regions": [],
-            "traffic_thresholds": {"smooth_max": 2, "slow_max": 5, "congestion_max": 10},
+            "traffic_thresholds": {"smooth_max": 1, "slow_max": 3, "congestion_max": 4},
             "no_parking_zones": [],
             "parking_stationary_pixel_threshold": 18,
             "parking_release_grace_frames": 3,
@@ -509,7 +509,7 @@ class VideoProcessor:
                 "traffic_regions": [],
                 "no_parking_zones": [],
                 "anomaly_road_roi": [],
-                "traffic_thresholds": dict(self.runtime_defaults.get("traffic_thresholds", {"smooth_max": 2, "slow_max": 5, "congestion_max": 10})),
+                "traffic_thresholds": dict(self.runtime_defaults.get("traffic_thresholds", {"smooth_max": 1, "slow_max": 3, "congestion_max": 4})),
                 "density_emit_every_processed_frames": int(self.runtime_defaults.get("density_emit_every_processed_frames", 3)),
                 "processed_frames": 0,
                 "active_scene": self._resolve_scene_for_device(device_id),
@@ -1804,17 +1804,17 @@ class VideoProcessor:
 
     @staticmethod
     def _traffic_status_for_count(count, thresholds):
-        smooth_max = int(thresholds.get("smooth_max", 2))
-        slow_max = int(thresholds.get("slow_max", 5))
-        congestion_max = int(thresholds.get("congestion_max", 10))
+        smooth_max = int(thresholds.get("smooth_max", 1))
+        slow_max = int(thresholds.get("slow_max", 3))
+        congestion_max = int(thresholds.get("congestion_max", 4))
 
         if count <= smooth_max:
             return "smooth", "green"
         if count <= slow_max:
             return "slow", "orange"
-        if count <= congestion_max:
+        if count >= congestion_max:
             return "congested", "red"
-        return "severe", "purple"
+        return "slow", "orange"
 
     def _build_traffic_density_event(self, device_id, state, tracked_vehicles, timestamp):
         """
@@ -2370,9 +2370,9 @@ class VideoProcessor:
         else:
             thresholds = self.runtime_defaults.get("traffic_thresholds", {})
         return {
-            "smoothMax": int(thresholds.get("smooth_max", 2)),
-            "slowMax": int(thresholds.get("slow_max", 5)),
-            "congestionMax": int(thresholds.get("congestion_max", 10)),
+            "smoothMax": int(thresholds.get("smooth_max", 1)),
+            "slowMax": int(thresholds.get("slow_max", 3)),
+            "congestionMax": int(thresholds.get("congestion_max", 4)),
         }
 
     def get_parking_threshold(self, device_id=None):
@@ -2468,16 +2468,16 @@ class VideoProcessor:
             # 业务阈值参数
             if 'smoothMax' in config_data or 'slowMax' in config_data or 'congestionMax' in config_data:
                 thresholds = self.runtime_defaults.setdefault('traffic_thresholds', {})
-                smooth_max = int(config_data.get('smoothMax', thresholds.get('smooth_max', 2)))
-                slow_max = int(config_data.get('slowMax', thresholds.get('slow_max', 5)))
-                congestion_max = int(config_data.get('congestionMax', thresholds.get('congestion_max', 10)))
+                smooth_max = int(config_data.get('smoothMax', thresholds.get('smooth_max', 1)))
+                slow_max = int(config_data.get('slowMax', thresholds.get('slow_max', 3)))
+                congestion_max = int(config_data.get('congestionMax', thresholds.get('congestion_max', 4)))
                 slow_max = max(slow_max, smooth_max + 1)
                 congestion_max = max(congestion_max, slow_max + 1)
 
                 thresholds['smooth_max'] = smooth_max
                 thresholds['slow_max'] = slow_max
                 thresholds['congestion_max'] = congestion_max
-                print(f"✅ 更新拥堵热力图阈值: 畅通≤{smooth_max}, 缓行≤{slow_max}, 拥堵≤{congestion_max}, 严重拥堵>{congestion_max}")
+                print(f"✅ 更新拥堵热力图阈值: 畅通≤{smooth_max}, 缓行={smooth_max + 1}-{slow_max}, 拥堵≥{congestion_max}")
 
                 # 更新所有设备的运行时配置
                 for state in self.runtime_state.values():

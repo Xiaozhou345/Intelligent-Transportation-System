@@ -24,9 +24,9 @@ const defaultConfig = {
     parkingThreshold: 30
   },
   business: {
-    smoothMax: 2,
-    slowMax: 5,
-    congestionMax: 10
+    smoothMax: 1,
+    slowMax: 3,
+    congestionMax: 4
   }
 }
 

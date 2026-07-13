@@ -38,8 +38,7 @@ const fallbackLayouts = {
 const statusMeta = {
   smooth: { text: '通畅', color: '#22c55e', className: 'smooth' },
   slow: { text: '缓行', color: '#f59e0b', className: 'slow' },
-  congested: { text: '拥堵', color: '#ef4444', className: 'congested' },
-  severe: { text: '严重拥堵', color: '#a855f7', className: 'severe' }
+  congested: { text: '拥堵', color: '#ef4444', className: 'congested' }
 }
 
 const colorMap = {
@@ -51,10 +50,9 @@ const colorMap = {
 }
 
 const getStatusByCount = (vehicleCount) => {
-  if (vehicleCount <= 2) return 'smooth'
-  if (vehicleCount <= 5) return 'slow'
-  if (vehicleCount <= 10) return 'congested'
-  return 'severe'
+  if (vehicleCount <= 1) return 'smooth'
+  if (vehicleCount <= 3) return 'slow'
+  return 'congested'
 }
 
 const getRegionStatus = (region) => {
@@ -121,14 +119,11 @@ const busiestRegion = computed(() => {
   }, null)
 })
 const congestedCount = computed(() => normalizedRegions.value.filter(region => region.status === 'congested').length)
-const severeCount = computed(() => normalizedRegions.value.filter(region => region.status === 'severe').length)
-const alertCount = computed(() => congestedCount.value + severeCount.value)
 const smoothCount = computed(() => normalizedRegions.value.filter(region => region.status === 'smooth').length)
 const hasBackendPolygon = computed(() => normalizedRegions.value.some(region => region.source === 'backend'))
 
 const statusSummary = computed(() => {
   if (!normalizedRegions.value.length) return '等待后端拥堵区域数据'
-  if (severeCount.value > 0) return `${severeCount.value} 个区域严重拥堵`
   if (congestedCount.value > 0) return `${congestedCount.value} 个区域拥堵`
   if (normalizedRegions.value.some(region => region.status === 'slow')) return '局部缓行'
   return '整体通畅'
@@ -344,7 +339,7 @@ onUnmounted(() => {
         <h2>道路拥堵热力图</h2>
       </div>
       <div class="heatmap-state">
-        <span :class="['state-dot', alertCount > 0 ? 'congested' : 'smooth']"></span>
+        <span :class="['state-dot', congestedCount > 0 ? 'congested' : 'smooth']"></span>
         <strong>{{ statusSummary }}</strong>
         <small>更新 {{ formattedUpdatedAt }}</small>
       </div>
@@ -404,10 +399,6 @@ onUnmounted(() => {
       <div class="legend-item">
         <span class="legend-color congested"></span>
         <span class="legend-text">拥堵</span>
-      </div>
-      <div class="legend-item">
-        <span class="legend-color severe"></span>
-        <span class="legend-text">严重拥堵</span>
       </div>
       <div class="legend-item source">
         <span class="source-mark"></span>
@@ -640,10 +631,6 @@ onUnmounted(() => {
 
 .legend-color.congested {
   background: #ef4444;
-}
-
-.legend-color.severe {
-  background: #a855f7;
 }
 
 .source-mark {

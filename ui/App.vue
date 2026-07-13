@@ -452,14 +452,22 @@ const handleVehicleDetection = (data) => {
   }
 }
 
+const congestionScoreMap = {
+  smooth: 0,
+  slow: 40,
+  congested: 75
+}
+
 const handleTrafficDensity = (data) => {
   const regions = data.data?.regions || data.regions
   if (Array.isArray(regions)) {
     trafficDensityData.value = regions
     latestTrafficDensityAt.value = data.timestamp || new Date().toISOString()
-    const totalVehicles = regions.reduce((sum, r) => sum + (Number(r.vehicle_count) || 0), 0)
-    const avgVehicles = regions.length ? totalVehicles / regions.length : 0
-    dashboardStats.congestionIndex = Math.round(Math.min(100, avgVehicles * 15))
+    const weightedScores = regions.map((region) => congestionScoreMap[region.status] ?? 0)
+    const totalScore = weightedScores.reduce((sum, score) => sum + score, 0)
+    dashboardStats.congestionIndex = weightedScores.length
+      ? Math.round(totalScore / weightedScores.length)
+      : 0
   }
 }
 
