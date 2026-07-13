@@ -1453,7 +1453,7 @@ onUnmounted(() => {
 
 @media (max-width: 1480px) {
   .overview-strip {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
   }
 
   .command-grid {
@@ -1476,11 +1476,15 @@ onUnmounted(() => {
   }
 
   .command-grid,
-  .overview-strip,
   .bottom-grid,
   .right-rail,
   .login-hero {
     grid-template-columns: 1fr;
+  }
+
+  .overview-strip {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 8px;
   }
 
   .scene-meta {
