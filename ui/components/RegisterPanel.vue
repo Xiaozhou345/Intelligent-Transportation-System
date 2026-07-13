@@ -1,6 +1,6 @@
 <script setup>
 import { reactive, ref } from 'vue'
-import { ElButton, ElDialog, ElForm, ElFormItem, ElInput, ElOption, ElSelect, ElMessage } from 'element-plus'
+import { ElButton, ElDialog, ElForm, ElFormItem, ElInput, ElMessage } from 'element-plus'
 
 const props = defineProps({
   visible: {
@@ -45,8 +45,7 @@ const submitRegister = () => {
   emit('register', {
     username: form.username.trim(),
     password: form.password,
-    role: form.role,
-    registerAt: new Date().toISOString()
+    role: 'user'
   })
   
   form.username = ''
@@ -88,26 +87,14 @@ const closeDialog = () => {
         <ElInput v-model="form.password" type="password" maxlength="32" placeholder="请输入密码" />
       </ElFormItem>
       <ElFormItem label="确认密码">
-        <ElInput 
-          v-model="form.confirmPassword" 
-          type="password" 
-          maxlength="32" 
+        <ElInput
+          v-model="form.confirmPassword"
+          type="password"
+          maxlength="32"
           placeholder="请再次输入密码"
           @blur="validatePassword"
         />
         <span v-if="passwordError" style="color: #f5222d; font-size: 12px; margin-top: 4px; display: block;">{{ passwordError }}</span>
-      </ElFormItem>
-      <ElFormItem label="用户类型">
-        <ElSelect
-          v-model="form.role"
-          class="role-select"
-          popper-class="register-role-popper"
-          :teleported="true"
-          fit-input-width
-        >
-          <ElOption label="普通用户" value="user" />
-          <ElOption label="管理员" value="admin" />
-        </ElSelect>
       </ElFormItem>
     </ElForm>
     <template #footer>

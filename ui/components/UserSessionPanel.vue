@@ -1,6 +1,6 @@
 <script setup>
 import { reactive } from 'vue'
-import { ElButton, ElDialog, ElForm, ElFormItem, ElInput, ElOption, ElSelect, ElTag } from 'element-plus'
+import { ElButton, ElDialog, ElForm, ElFormItem, ElInput, ElTag } from 'element-plus'
 
 const props = defineProps({
   user: {
@@ -25,20 +25,17 @@ const roleMap = {
 }
 
 const form = reactive({
-  username: 'user',
-  password: '',
-  role: 'user'
+  username: 'admin',
+  password: ''
 })
 
 const submitLogin = () => {
-  if (!form.password) {
+  if (!form.username.trim() || !form.password) {
     return
   }
   emit('login', {
-    username: form.username.trim() || 'operator',
-    password: form.password,
-    role: form.role,
-    loginAt: new Date().toISOString()
+    username: form.username.trim(),
+    password: form.password
   })
 }
 
@@ -56,18 +53,6 @@ const closeDialog = () => {
         </ElFormItem>
         <ElFormItem label="密码">
           <ElInput v-model="form.password" type="password" maxlength="32" placeholder="请输入密码" />
-        </ElFormItem>
-        <ElFormItem label="角色">
-          <ElSelect
-            v-model="form.role"
-            class="role-select"
-            popper-class="login-role-popper"
-            :teleported="true"
-            fit-input-width
-          >
-            <ElOption label="管理员" value="admin" />
-            <ElOption label="普通用户" value="user" />
-          </ElSelect>
         </ElFormItem>
         <ElButton type="primary" class="login-submit" @click="submitLogin">进入视频监控台</ElButton>
       </ElForm>
@@ -99,18 +84,6 @@ const closeDialog = () => {
         </ElFormItem>
         <ElFormItem label="密码">
           <ElInput v-model="form.password" type="password" maxlength="32" placeholder="请输入密码" />
-        </ElFormItem>
-        <ElFormItem label="角色">
-          <ElSelect
-            v-model="form.role"
-            class="role-select"
-            popper-class="login-role-popper"
-            :teleported="true"
-            fit-input-width
-          >
-            <ElOption label="管理员" value="admin" />
-            <ElOption label="普通用户" value="user" />
-          </ElSelect>
         </ElFormItem>
       </ElForm>
       <template #footer>

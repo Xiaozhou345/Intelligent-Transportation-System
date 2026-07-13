@@ -1,6 +1,6 @@
 <script setup>
 import { computed, defineAsyncComponent, ref, reactive, onMounted, onUnmounted, nextTick } from 'vue'
-import { ElAlert, ElTabPane, ElTabs, ElTag } from 'element-plus'
+import { ElAlert, ElMessage, ElTabPane, ElTabs, ElTag } from 'element-plus'
 import websocketManager from './utils/websocketManager'
 import VideoPlayer from './components/VideoPlayer.vue'
 
@@ -194,30 +194,125 @@ const getAlarmKey = (alarm, eventType = alarm?.event_type) => {
 }
 
 const loadSavedUser = () => {
-  try {
-    const saved = window.localStorage.getItem('its_current_user')
-    currentUser.value = saved ? JSON.parse(saved) : null
-  } catch {
-    currentUser.value = null
+  currentUser.value = null
+  window.localStorage.removeItem('its_current_user')
+}
+
+const resetMonitoringState = () => {
+  connectionStatus.value = '未连接'
+  reconnectCount.value = 0
+  showError.value = false
+  errorMessage.value = ''
+  latestLatency.value = 0
+  latestVideoOverlay.value = null
+  latestPlateResult.value = null
+  plateRecords.value = []
+  vehicleDetectionRecords.value = []
+  trafficDensityData.value = []
+  latestTrafficDensityAt.value = ''
+  illegalParkingRecords.value = []
+  roadAnomalyRecords.value = []
+  eventRecords.value = []
+  deviceList.value = []
+  systemStatus.value = {}
+  anomalyModeStatus.value = { mode: 'detecting', background_frames: 0, enabled: false }
+  alarmDispositionRecords.value = []
+  dashboardStats.plateCount = 0
+  dashboardStats.congestionIndex = 0
+  dashboardStats.illegalParkingCount = 0
+  dashboardStats.roadAnomalyCount = 0
+}
+
+const stopAuthenticatedRuntime = ({ preserveEvents = false } = {}) => {
+  if (systemStatusTimer) {
+    clearInterval(systemStatusTimer)
+    systemStatusTimer = null
+  }
+  websocketManager.disconnect()
+  if (!preserveEvents) {
+    resetMonitoringState()
+  } else {
+    connectionStatus.value = '未连接'
+    reconnectCount.value = 0
+    showError.value = false
+    errorMessage.value = ''
   }
 }
 
-const handleLogin = (user) => {
-  currentUser.value = user
-  window.localStorage.setItem('its_current_user', JSON.stringify(user))
-  showLoginDialog.value = false
-  addEventRecord({
-    event_type: 'user_login',
-    timestamp: new Date().toISOString(),
-    device_id: 'frontend_console',
-    status: 'normal',
-    summary: `${user.username} 以${roleTextMap[user.role] || user.role}身份登录`,
-    data: user
+const startAuthenticatedRuntime = async () => {
+  stopAuthenticatedRuntime({ preserveEvents: true })
+
+  await loadHistoryData()
+
+  fetchSystemStatus()
+  fetchAnomalyStatus()
+  fetchDevices()
+  systemStatusTimer = setInterval(() => {
+    fetchSystemStatus()
+    fetchAnomalyStatus()
+    fetchDevices()
+  }, 3000)
+
+  websocketManager.onMessage((data) => {
+    console.log('WebSocket 消息:', data)
+    routeEvent(data)
   })
+
+  websocketManager.onStatusChange((status, count) => {
+    connectionStatus.value = statusMap[status] || status
+    reconnectCount.value = count
+
+    if (status === 'disconnected' && count >= 10) {
+      showError.value = true
+      errorMessage.value = 'WebSocket 连接失败，已达到最大重试次数'
+    } else if (status === 'connected' || status === 'simulating') {
+      showError.value = false
+      if (status === 'connected') {
+        websocketManager.sendEvent('request_devices')
+        fetchDevices()
+      }
+    }
+  })
+
+  websocketManager.connect(CLOUD_SERVER_URL)
+}
+
+const handleLogin = async (credentials) => {
+  try {
+    const response = await fetch(`${CLOUD_SERVER_URL}/api/users/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username: credentials.username,
+        password: credentials.password
+      })
+    })
+    const payload = await response.json()
+    if (!response.ok || payload.status !== 'success') {
+      throw new Error(payload.message || '登录失败')
+    }
+
+    const user = payload.data
+    currentUser.value = user
+    showLoginDialog.value = false
+    addEventRecord({
+      event_type: 'user_login',
+      timestamp: new Date().toISOString(),
+      device_id: 'frontend_console',
+      status: 'normal',
+      summary: `${user.username} 以${roleTextMap[user.role] || user.role}身份登录`,
+      data: user
+    })
+    await startAuthenticatedRuntime()
+    ElMessage.success('登录成功')
+  } catch (error) {
+    ElMessage.error(error.message || '登录失败')
+  }
 }
 
 const handleLogout = () => {
   const user = currentUser.value
+  stopAuthenticatedRuntime()
   currentUser.value = null
   window.localStorage.removeItem('its_current_user')
   addEventRecord({
@@ -230,17 +325,28 @@ const handleLogout = () => {
   })
 }
 
-const handleRegister = (user) => {
-  addEventRecord({
-    event_type: 'user_login',
-    timestamp: new Date().toISOString(),
-    device_id: 'frontend_console',
-    status: 'normal',
-    summary: `${user.username} 注册为${roleTextMap[user.role] || user.role}并登录`,
-    data: user
-  })
-  showRegisterDialog.value = false
-  handleLogin(user)
+const handleRegister = async (form) => {
+  try {
+    const response = await fetch(`${CLOUD_SERVER_URL}/api/users`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username: form.username,
+        password: form.password,
+        role: form.role || 'user'
+      })
+    })
+    const payload = await response.json()
+    if (!response.ok || payload.status !== 'success') {
+      throw new Error(payload.message || '注册失败')
+    }
+
+    showRegisterDialog.value = false
+    ElMessage.success('注册成功，正在登录...')
+    await handleLogin({ username: form.username, password: form.password })
+  } catch (error) {
+    ElMessage.error(error.message || '注册失败')
+  }
 }
 
 const applyAlarmStatus = (payload) => {
@@ -727,55 +833,21 @@ onMounted(async () => {
   if (isPublisherMode) return
   loadSavedUser()
 
-  // 先加载历史数据（使用 await 确保完成）
-  await loadHistoryData()
-
   clockTimer = setInterval(() => {
     currentTime.value = new Date()
   }, 1000)
 
-  fetchSystemStatus()
-  fetchAnomalyStatus()
-  fetchDevices()
-  systemStatusTimer = setInterval(() => {
-    fetchSystemStatus()
-    fetchAnomalyStatus()
-    fetchDevices()
-  }, 3000)
-
-  websocketManager.onMessage((data) => {
-    console.log('WebSocket 消息:', data)
-    routeEvent(data)
-  })
-
-  websocketManager.onStatusChange((status, count) => {
-    connectionStatus.value = statusMap[status] || status
-    reconnectCount.value = count
-
-    if (status === 'disconnected' && count >= 10) {
-      showError.value = true
-      errorMessage.value = 'WebSocket 连接失败，已达到最大重试次数'
-    } else if (status === 'connected' || status === 'simulating') {
-      showError.value = false
-      if (status === 'connected') {
-        websocketManager.sendEvent('request_devices')
-        fetchDevices()
-      }
-    }
-  })
-
-  websocketManager.connect(CLOUD_SERVER_URL)
+  if (currentUser.value) {
+    await startAuthenticatedRuntime()
+  }
 })
 
 onUnmounted(() => {
   if (clockTimer) {
     clearInterval(clockTimer)
   }
-  if (systemStatusTimer) {
-    clearInterval(systemStatusTimer)
-  }
   if (!isPublisherMode) {
-    websocketManager.disconnect()
+    stopAuthenticatedRuntime({ preserveEvents: true })
   }
 })
 </script>
