@@ -1,0 +1,16 @@
+[Unit]
+Description=ITS FRP server
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/ubuntu/frp_0.69.1_linux_amd64
+ExecStart=/home/ubuntu/frp_0.69.1_linux_amd64/frps -c /home/ubuntu/frp_0.69.1_linux_amd64/frps.toml
+Restart=always
+RestartSec=2
+LimitNOFILE=1048576
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

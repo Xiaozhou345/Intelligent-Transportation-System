@@ -1,0 +1,26 @@
+serverAddr = "106.54.10.11"
+serverPort = 7000
+auth.method = "token"
+auth.token = "its_demo_2026"
+
+log.to = "./frpc.log"
+log.level = "info"
+log.maxDays = 3
+
+[[proxies]]
+name = "its-api"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 5001
+remotePort = 15000
+
+[[proxies]]
+name = "its-frontend"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 5173
+remotePort = 15173
+
+# MediaMTX now runs directly on the Tencent Cloud server.
+# Keep frp for local API/frontend only; do not proxy 1935/8888/8889/8189
+# or it will conflict with cloud-side MediaMTX ports.

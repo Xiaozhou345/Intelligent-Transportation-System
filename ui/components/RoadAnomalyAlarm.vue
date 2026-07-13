@@ -1,0 +1,466 @@
+<script setup>
+import { ref, watch } from 'vue'
+import { ElButton, ElDialog, ElInput, ElTable, ElTableColumn, ElTag, ElNotification } from 'element-plus'
+
+const props = defineProps({
+  records: {
+    type: Array,
+    default: () => []
+  },
+  canDispose: {
+    type: Boolean,
+    default: true
+  },
+  canOperate: {
+    type: Boolean,
+    default: true
+  },
+  modeStatus: {
+    type: Object,
+    default: () => ({})
+  }
+})
+
+const emit = defineEmits(['dispose-alarm', 'send-command'])
+
+const displayRecords = ref([])
+const resolvedKeys = ref(new Set())
+const showDetailDialog = ref(false)
+const showDisposeDialog = ref(false)
+const currentAlarm = ref(null)
+const disposeNote = ref('已派人排查，异常解除')
+
+const getAlarmKey = (row) => `${row.timestamp || ''}-${row.data?.anomaly_type || ''}-${row.data?.affected_lane || ''}`
+
+const anomalyTypeMap = {
+  unknown_object: '不明物体',
+  fallen_object: '掉落物',
+  debris: '杂物'
+}
+
+const laneMap = {
+  lane_1: '第一车道',
+  lane_2: '第二车道',
+  lane_3: '第三车道'
+}
+
+const formatTime = (timestamp) => {
+  if (!timestamp) return '-'
+  const date = new Date(timestamp)
+  const hours = date.getHours().toString().padStart(2, '0')
+  const minutes = date.getMinutes().toString().padStart(2, '0')
+  const seconds = date.getSeconds().toString().padStart(2, '0')
+  return `${hours}:${minutes}:${seconds}`
+}
+
+const formatBbox = (bbox) => {
+  if (!bbox || !Array.isArray(bbox)) return '-'
+  return `(${Math.round(bbox[0])}, ${Math.round(bbox[1])})`
+}
+
+const getAnomalyTypeText = (type) => {
+  return anomalyTypeMap[type] || type
+}
+
+const getLaneText = (lane) => {
+  return laneMap[lane] || lane
+}
+
+const getStatusText = (status) => {
+  return status === 'warning' ? '告警中' : '已恢复'
+}
+
+const getStatusType = (status) => {
+  return status === 'warning' ? 'danger' : 'success'
+}
+
+const getModeText = (mode) => {
+  if (props.modeStatus.models_loading) return '模型加载中'
+  if (mode === 'background_learning') return '背景学习中'
+  if (mode === 'detecting') return '检测中'
+  return '未标定'
+}
+
+const calibrationReasonMap = {
+  insufficient_visible_road: '有效道路几乎全部被遮挡',
+  empty_frame: '视频帧无效'
+}
+
+const getCalibrationReason = (reason) => calibrationReasonMap[reason] || ''
+
+const detectionReasonMap = {
+  not_calibrated: '等待背景标定',
+  empty_frame: '等待有效视频帧',
+  below_heat_threshold: '画面正常',
+  no_component: '变化区域未达到目标条件',
+  candidate_tracking: '候选目标确认中',
+  warning: '已确认异常目标',
+  camera_change: '镜头变化，正在重新标定'
+}
+
+const getDetectionReason = (reason) => detectionReasonMap[reason] || ''
+
+const formatScore = (value) => {
+  const score = Number(value)
+  return Number.isFinite(score) ? score.toFixed(3) : '-'
+}
+
+const getModeType = (mode) => {
+  if (props.modeStatus.models_loading) return 'warning'
+  if (mode === 'background_learning') return 'warning'
+  if (mode === 'detecting') return 'success'
+  return 'info'
+}
+
+const sendAnomalyCommand = (command, message) => {
+  emit('send-command', { command })
+  if (message) {
+    ElNotification({
+      title: '异常检测模式',
+      message,
+      type: 'info',
+      duration: 3000
+    })
+  }
+}
+
+const startBackgroundLearning = () => {
+  sendAnomalyCommand('anomaly_background_start', '请保持道路画面干净，系统正在学习正常背景')
+}
+
+const startDetection = () => {
+  sendAnomalyCommand('anomaly_detection_start', '检测启动指令已发送，等待后端确认')
+}
+
+const resetCalibration = () => {
+  sendAnomalyCommand('anomaly_reset', '已重置背景模型，请重新初始化背景')
+}
+
+const handleRowClass = ({ row }) => {
+  return getDisplayStatus(row) === 'warning' ? 'anomaly-row-highlight' : ''
+}
+
+const getDisplayStatus = (row) => {
+  return resolvedKeys.value.has(getAlarmKey(row)) ? 'resolved' : row.status
+}
+
+const handleResolve = (row) => {
+  currentAlarm.value = row
+  disposeNote.value = '已派人排查，异常解除'
+  showDisposeDialog.value = true
+}
+
+const confirmResolve = () => {
+  if (!currentAlarm.value) return
+  const next = new Set(resolvedKeys.value)
+  next.add(getAlarmKey(currentAlarm.value))
+  resolvedKeys.value = next
+  emit('dispose-alarm', {
+    action: 'resolved',
+    eventType: 'road_anomaly',
+    alarm: currentAlarm.value,
+    note: disposeNote.value
+  })
+  showDisposeDialog.value = false
+}
+
+const handleViewDetail = (row) => {
+  currentAlarm.value = row
+  showDetailDialog.value = true
+}
+
+watch(() => props.records, (newRecords) => {
+  displayRecords.value = [...newRecords].slice(0, 20)
+}, { deep: true, immediate: true })
+
+watch(() => props.records.length, (newLen, oldLen) => {
+  if (newLen > oldLen) {
+    const newAlarm = props.records[0]
+    if (newAlarm) {
+      ElNotification({
+        title: '⚠️ 道路异常',
+        message: `异常类型: ${getAnomalyTypeText(newAlarm.data?.anomaly_type)}\n影响车道: ${getLaneText(newAlarm.data?.affected_lane)}`,
+        type: newAlarm.status === 'warning' ? 'warning' : 'info',
+        duration: 5000
+      })
+    }
+  }
+})
+</script>
+
+<template>
+  <div class="road-anomaly-alarm">
+    <div class="alarm-header">
+      <div>
+        <h3>道路异常告警</h3>
+        <p>初始化时保持道路干净，背景帧达标后会自动进入检测</p>
+      </div>
+      <ElTag :type="getModeType(modeStatus.mode)" size="small">
+        {{ getModeText(modeStatus.mode) }}
+      </ElTag>
+    </div>
+
+    <div class="calibration-actions">
+      <ElButton type="warning" size="small" :disabled="!canOperate || modeStatus.models_loading" @click="startBackgroundLearning">
+        初始化背景
+      </ElButton>
+      <ElButton
+        type="danger"
+        size="small"
+        :disabled="!canOperate || modeStatus.models_loading || modeStatus.mode === 'detecting'"
+        @click="startDetection"
+      >
+        {{ modeStatus.mode === 'detecting' ? '检测中' : '开始检测' }}
+      </ElButton>
+      <ElButton size="small" :disabled="!canOperate || modeStatus.models_loading" @click="resetCalibration">
+        重新标定
+      </ElButton>
+      <span v-if="modeStatus.background_frames !== undefined">
+        背景帧 {{ modeStatus.background_frames }}/{{ modeStatus.min_background_frames || 8 }}
+      </span>
+      <span v-if="modeStatus.skipped_frames">
+        跳过 {{ modeStatus.skipped_frames }}
+      </span>
+      <span v-if="modeStatus.models_loading">
+        后台加载中，完成后自动可用
+      </span>
+      <span v-else-if="modeStatus.models_ready && modeStatus.models_load_ms">
+        模型就绪 {{ (modeStatus.models_load_ms / 1000).toFixed(1) }}s
+      </span>
+      <span v-if="modeStatus.mode === 'detecting'">
+        分数 {{ formatScore(modeStatus.last_heat_score) }}/{{ formatScore(modeStatus.heat_threshold) }}
+      </span>
+      <span v-if="modeStatus.mode === 'detecting' && modeStatus.last_appearance_score !== undefined">
+        细节 {{ formatScore(modeStatus.last_appearance_score) }}/{{ formatScore(modeStatus.appearance_threshold) }}
+      </span>
+      <span v-if="modeStatus.mode === 'detecting' && modeStatus.last_candidate_count !== undefined">
+        候选 {{ modeStatus.last_candidate_count }}
+      </span>
+      <span
+        v-if="modeStatus.mode === 'detecting' && getDetectionReason(modeStatus.last_detection_reason)"
+        :class="{ 'detection-warning': modeStatus.last_detection_reason === 'camera_change' }"
+      >
+        {{ getDetectionReason(modeStatus.last_detection_reason) }}
+      </span>
+      <span
+        v-if="modeStatus.last_calibration_status === 'skipped' && getCalibrationReason(modeStatus.last_calibration_reason)"
+        class="calibration-warning"
+      >
+        {{ getCalibrationReason(modeStatus.last_calibration_reason) }}
+      </span>
+      <span v-if="modeStatus.status === 'error'" class="calibration-error">{{ modeStatus.message }}</span>
+    </div>
+
+    <ElTable 
+      :data="displayRecords" 
+      stripe 
+      size="small" 
+      :max-height="350"
+      :row-class-name="handleRowClass"
+    >
+      <ElTableColumn type="index" label="序号" width="50" align="center" />
+      <ElTableColumn prop="timestamp" label="告警时间" width="100" align="center">
+        <template #default="{ row }">
+          {{ formatTime(row.timestamp) }}
+        </template>
+      </ElTableColumn>
+      <ElTableColumn label="异常类型" width="100" align="center">
+        <template #default="{ row }">
+          <ElTag :type="row.status === 'warning' ? 'danger' : 'info'" size="small">
+            {{ getAnomalyTypeText(row.data?.anomaly_type) }}
+          </ElTag>
+        </template>
+      </ElTableColumn>
+      <ElTableColumn label="影响车道" width="100" align="center">
+        <template #default="{ row }">
+          {{ getLaneText(row.data?.affected_lane) }}
+        </template>
+      </ElTableColumn>
+      <ElTableColumn label="位置" width="100" align="center">
+        <template #default="{ row }">
+          {{ formatBbox(row.bbox) }}
+        </template>
+      </ElTableColumn>
+      <ElTableColumn label="持续帧数" width="90" align="center">
+        <template #default="{ row }">
+          {{ row.data?.duration_frames || 0 }}帧
+        </template>
+      </ElTableColumn>
+      <ElTableColumn label="状态" width="80" align="center">
+        <template #default="{ row }">
+          <ElTag :type="getStatusType(getDisplayStatus(row))" size="small">
+            {{ getStatusText(getDisplayStatus(row)) }}
+          </ElTag>
+        </template>
+      </ElTableColumn>
+      <ElTableColumn label="操作" width="120" align="center">
+        <template #default="{ row }">
+          <ElButton type="primary" link size="small" @click="handleViewDetail(row)">详情</ElButton>
+          <ElButton
+            v-if="getDisplayStatus(row) === 'warning'"
+            v-show="canDispose"
+            type="success"
+            link
+            size="small"
+            @click="handleResolve(row)"
+          >
+            解除
+          </ElButton>
+        </template>
+      </ElTableColumn>
+    </ElTable>
+    <div v-if="displayRecords.length === 0" class="empty-tip">
+      暂无道路异常告警记录
+    </div>
+
+    <ElDialog title="道路异常详情" v-model="showDetailDialog" width="460px">
+      <div v-if="currentAlarm" class="alarm-detail">
+        <div><span>异常类型</span><strong>{{ getAnomalyTypeText(currentAlarm.data?.anomaly_type) }}</strong></div>
+        <div><span>影响车道</span><strong>{{ getLaneText(currentAlarm.data?.affected_lane) }}</strong></div>
+        <div><span>告警时间</span><strong>{{ formatTime(currentAlarm.timestamp) }}</strong></div>
+        <div><span>持续帧数</span><strong>{{ currentAlarm.data?.duration_frames || 0 }} 帧</strong></div>
+        <div><span>目标位置</span><strong>{{ formatBbox(currentAlarm.bbox) }}</strong></div>
+        <div><span>处置状态</span><strong>{{ getStatusText(getDisplayStatus(currentAlarm)) }}</strong></div>
+      </div>
+      <template #footer>
+        <ElButton @click="showDetailDialog = false">关闭</ElButton>
+        <ElButton
+          v-if="currentAlarm && getDisplayStatus(currentAlarm) === 'warning'"
+          v-show="canDispose"
+          type="primary"
+          @click="handleResolve(currentAlarm); showDetailDialog = false"
+        >
+          解除告警
+        </ElButton>
+      </template>
+    </ElDialog>
+
+    <ElDialog title="解除道路异常告警" v-model="showDisposeDialog" width="420px">
+      <div class="dispose-form">
+        <span>处置备注</span>
+        <ElInput
+          v-model="disposeNote"
+          type="textarea"
+          :rows="3"
+          maxlength="80"
+          show-word-limit
+        />
+      </div>
+      <template #footer>
+        <ElButton @click="showDisposeDialog = false">取消</ElButton>
+        <ElButton type="primary" @click="confirmResolve">确认解除</ElButton>
+      </template>
+    </ElDialog>
+  </div>
+</template>
+
+<style scoped>
+.road-anomaly-alarm {
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.9), rgba(8, 18, 33, 0.92));
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  border-radius: 8px;
+  padding: 16px;
+  box-shadow: 0 18px 38px rgba(2, 8, 23, 0.36), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  margin-top: 16px;
+}
+
+.road-anomaly-alarm h3 {
+  font-size: 16px;
+  color: #e0f2fe;
+  margin: 0;
+}
+
+.alarm-header {
+  align-items: flex-start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.alarm-header p {
+  color: #93c5fd;
+  font-size: 12px;
+  margin: 4px 0 0;
+}
+
+.calibration-actions {
+  align-items: center;
+  background: rgba(14, 165, 233, 0.1);
+  border: 1px solid rgba(56, 189, 248, 0.14);
+  border-radius: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 10px;
+}
+
+.calibration-actions span {
+  color: #93c5fd;
+  font-size: 12px;
+}
+
+.calibration-actions .calibration-error {
+  color: #fecaca;
+  flex-basis: 100%;
+}
+
+.calibration-actions .detection-warning {
+  color: #fbbf24;
+}
+
+.anomaly-row-highlight {
+  background-color: #fef0f0 !important;
+}
+
+.anomaly-row-highlight td {
+  border-color: #ffccc7 !important;
+}
+
+.empty-tip {
+  text-align: center;
+  color: #93c5fd;
+  padding: 20px;
+  font-size: 14px;
+}
+
+.alarm-detail {
+  display: grid;
+  gap: 10px;
+}
+
+.alarm-detail div {
+  align-items: center;
+  background: rgba(15, 23, 42, 0.72);
+  border: 1px solid rgba(56, 189, 248, 0.14);
+  border-radius: 8px;
+  display: flex;
+  justify-content: space-between;
+  padding: 10px 12px;
+}
+
+.alarm-detail span {
+  color: #93c5fd;
+  font-size: 13px;
+}
+
+.alarm-detail strong {
+  color: #e0f2fe;
+  font-size: 14px;
+}
+
+.dispose-form {
+  display: grid;
+  gap: 8px;
+}
+
+.dispose-form span {
+  color: #93c5fd;
+  font-size: 13px;
+}
+
+.calibration-warning {
+  color: #fbbf24;
+}
+</style>

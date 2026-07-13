@@ -1,0 +1,18 @@
+[Unit]
+Description=ITS MediaMTX relay
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/ubuntu/mediamtx
+ExecStart=/home/ubuntu/mediamtx/mediamtx /home/ubuntu/mediamtx/cloud-mediamtx.yml
+Restart=always
+RestartSec=2
+KillSignal=SIGINT
+TimeoutStopSec=15
+LimitNOFILE=1048576
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

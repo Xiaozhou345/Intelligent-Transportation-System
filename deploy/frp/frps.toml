@@ -1,0 +1,7 @@
+bindPort = 7000
+auth.method = "token"
+auth.token = "its_demo_2026"
+
+log.to = "./frps.log"
+log.level = "info"
+log.maxDays = 3

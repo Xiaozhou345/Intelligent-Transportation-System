@@ -1,0 +1,6 @@
+path: data/sandbox_drivable
+train: images/train
+val: images/val
+
+names:
+  0: drivable_area

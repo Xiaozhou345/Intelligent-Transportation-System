@@ -1,0 +1,52 @@
+{
+  "default": {
+    "traffic_regions": [
+      {
+        "region_id": "road_A",
+        "name": "A路段",
+        "polygon": [[0.02, 0.46], [0.26, 0.46], [0.26, 0.84], [0.02, 0.84]]
+      },
+      {
+        "region_id": "road_B",
+        "name": "B路段",
+        "polygon": [[0.26, 0.46], [0.50, 0.46], [0.50, 0.84], [0.26, 0.84]]
+      },
+      {
+        "region_id": "road_C",
+        "name": "C路段",
+        "polygon": [[0.50, 0.46], [0.74, 0.46], [0.74, 0.84], [0.50, 0.84]]
+      },
+      {
+        "region_id": "road_D",
+        "name": "D路段",
+        "polygon": [[0.74, 0.46], [0.98, 0.46], [0.98, 0.84], [0.74, 0.84]]
+      }
+    ],
+    "traffic_thresholds": {
+      "smooth_max": 1,
+      "slow_max": 3,
+      "congestion_max": 4
+    },
+    "no_parking_zones": [
+      {
+        "zone_id": "no_parking_A",
+        "name": "禁停区A",
+        "polygon": [[0.0736, 0.2500], [0.8062, 0.2500], [0.8450, 0.9500], [0.0698, 0.9500]],
+        "threshold_seconds": 2,
+        "cooldown_seconds": 10
+      }
+    ],
+    "parking_stationary_pixel_threshold": 35,
+    "parking_release_grace_frames": 15,
+    "parking_min_history": 3,
+    "density_emit_every_processed_frames": 3,
+    "anomaly_mode": "background_learning",
+    "anomaly_min_background_frames": 20,
+    "anomaly_road_roi": [
+      [0.03, 0.42],
+      [0.86, 0.42],
+      [0.84, 0.84],
+      [0.03, 0.84]
+    ]
+  }
+}

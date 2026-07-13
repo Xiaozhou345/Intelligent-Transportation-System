@@ -18,6 +18,7 @@ htmlcov/
 .pytest_cache/
 .mypy_cache/
 .dmypy.json
+.ultralytics_config/
 
 # Virtual Environment
 venv/
@@ -26,18 +27,11 @@ ENV/
 .venv/
 virtualenv/
 
-# AI Models (大文件不提交)
-*.pth
-*.pt
-*.onnx
-*.h5
-*.pb
-*.tflite
-*.weights
-*.caffemodel
-models/
-checkpoints/
-weights/
+# AI Models (允许提交项目模型权重，便于部署迁移)
+# 注意：GitHub 单文件硬限制约 100MB，超过时需要改用 Git LFS 或外部存储。
+
+# YOLO Training Outputs (训练过程输出不提交，仅提交最终模型和数据集)
+runs/
 
 # Video Files (视频文件不提交)
 *.mp4
@@ -58,6 +52,13 @@ streams/
 # *.bmp
 dataset/
 data/raw/
+data/sandbox_anomaly/**/*.jpg
+data/sandbox_anomaly/**/*.jpeg
+data/sandbox_anomaly/**/*.png
+data/sandbox_anomaly/**/*.bmp
+data/sandbox_anomaly/**/*.webp
+data/sandbox_anomaly/output/
+data/sandbox_anomaly/output*/
 
 # Logs
 *.log
@@ -68,9 +69,11 @@ logs/
 .env
 .env.local
 .env.*.local
+.env.db
 config.ini
 secrets.json
 credentials.json
+edge_member_a/config.json
 
 # IDE & Editor
 .vscode/
@@ -101,6 +104,7 @@ build/
 # Temporary Files
 tmp/
 temp/
+.tools/
 *.tmp
 *.bak
 *.cache
@@ -109,6 +113,7 @@ temp/
 Thumbs.db
 .DS_Store
 desktop.ini
+*:Zone.Identifier
 
 # Jupyter Notebook
 .ipynb_checkpoints/
@@ -124,3 +129,26 @@ docker-compose.override.yml
 .coverage
 coverage/
 test-results/
+
+# Local-only dataset staging / manual test artifacts
+cloud/datasets/sandbox_vehicle_new/
+external_datasets/
+plate_test_output/
+plate_crop_*.jpg
+yolo26n.pt
+
+# Local plate-training and debug artifacts
+cloud/ai_models/plate_recognition/sandbox_lprnet_rejected.pth
+cloud/ai_models/plate_recognition/sandbox_video_lprnet_candidate.pth
+data/ccpd_plate_detection_smoke/
+data/ccpd_plate_ocr/
+data/confirmed_video_plate_ocr/
+data/confirmed_video_plate_ocr_v2/
+data/confirmed_video_plates.txt
+data/plate_debug/
+data/plate_debug_report_strong_candidate/
+data/plate_debug_report_updated/
+data/plate_video_frames/
+data/plate_video_report/
+data/plate_video_report_candidate/
+data/plate_video_report_strong_candidate/

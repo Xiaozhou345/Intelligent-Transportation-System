@@ -1,0 +1,19 @@
+{
+  "cloud_api_base": "http://106.54.10.11:15000",
+  "api_token": "",
+  "stream_url": "rtsp://106.54.10.11:8554/live/mobile_001",
+  "srt_push_url": "srt://106.54.10.11:8890?streamid=publish:live/mobile_001&latency=200",
+  "rtmp_server": "106.54.10.11",
+  "rtmp_port": 1935,
+  "rtmp_app": "live",
+  "device_id": "mobile_001",
+  "device_type": "huawei_tablet",
+  "scene_id": "scene_704_sandbox",
+  "resolution": "1280x720",
+  "fps": 15,
+  "codec": "H.264",
+  "bitrate": "1.5Mbps",
+  "heartbeat_interval_seconds": 10,
+  "request_timeout_seconds": 5,
+  "upload_endpoint": "/api/video/upload"
+}
