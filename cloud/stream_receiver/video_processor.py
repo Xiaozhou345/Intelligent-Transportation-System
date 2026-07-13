@@ -227,6 +227,9 @@ class VideoProcessor:
                     dino_detector_kwargs["max_candidates"] = int(
                         os.getenv("ITS_DINO_MAX_CANDIDATES", "1")
                     )
+                    dino_detector_kwargs["max_background_vehicle_ratio"] = float(
+                        os.getenv("ITS_DINO_MAX_BG_VEHICLE_RATIO", "0.65")
+                    )
                     detector = DinoReferenceDetector(
                         model_name=os.getenv("ITS_DINO_MODEL", "dinov2_vits14_reg"),
                         image_size=int(os.getenv("ITS_DINO_IMAGE_SIZE", "518")),
@@ -240,7 +243,7 @@ class VideoProcessor:
                         camera_change_frames=int(os.getenv("ITS_DINO_CAMERA_CHANGE_FRAMES", "3")),
                         allow_background_vehicles=os.getenv(
                             "ITS_DINO_ALLOW_BG_VEHICLES",
-                            "false",
+                            "true",
                         ).lower() == "true",
                         min_thin_side=int(os.getenv("ITS_DINO_MIN_THIN_SIDE", "18")),
                         max_thin_aspect=float(os.getenv("ITS_DINO_MAX_THIN_ASPECT", "4.0")),
@@ -1410,6 +1413,32 @@ class VideoProcessor:
                             "background_frames": actual_background_frames,
                             "skipped_frames": skipped_frames,
                             "total_processed": actual_background_frames + skipped_frames,
+                            "skip_reason": getattr(
+                                self.anomaly_processor.detector,
+                                "last_background_skip_reason",
+                                None,
+                            ),
+                            "reason": getattr(
+                                self.anomaly_processor.detector,
+                                "last_background_skip_reason",
+                                None,
+                            ),
+                            "vehicle_mask_ratio": round(
+                                float(getattr(
+                                    self.anomaly_processor.detector,
+                                    "last_background_vehicle_ratio",
+                                    0.0,
+                                )),
+                                4,
+                            ),
+                            "valid_road_ratio": round(
+                                float(getattr(
+                                    self.anomaly_processor.detector,
+                                    "last_background_valid_ratio",
+                                    0.0,
+                                )),
+                                4,
+                            ),
                         },
                     })
                     print(
@@ -1886,6 +1915,9 @@ class VideoProcessor:
             "last_heat_score",
             "last_foreground_ratio",
             "needs_recalibration",
+            "last_background_vehicle_ratio",
+            "last_background_valid_ratio",
+            "last_background_skip_reason",
         ):
             if hasattr(detector, field):
                 value = getattr(detector, field)

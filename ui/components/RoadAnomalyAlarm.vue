@@ -80,6 +80,15 @@ const getModeText = (mode) => {
   return '未标定'
 }
 
+const calibrationReasonMap = {
+  vehicles_not_allowed: '严格标定模式不允许车辆',
+  vehicle_mask_too_large: '车辆遮挡道路过多',
+  insufficient_visible_road: '有效道路区域不足',
+  empty_frame: '视频帧无效'
+}
+
+const getCalibrationReason = (reason) => calibrationReasonMap[reason] || ''
+
 const getModeType = (mode) => {
   if (mode === 'background_learning') return 'warning'
   if (mode === 'detecting') return 'success'
@@ -189,6 +198,12 @@ watch(() => props.records.length, (newLen, oldLen) => {
       </span>
       <span v-if="modeStatus.skipped_frames">
         跳过 {{ modeStatus.skipped_frames }}
+      </span>
+      <span
+        v-if="modeStatus.last_calibration_status === 'skipped' && getCalibrationReason(modeStatus.last_calibration_reason)"
+        class="calibration-warning"
+      >
+        {{ getCalibrationReason(modeStatus.last_calibration_reason) }}
       </span>
       <span v-if="modeStatus.status === 'error'" class="calibration-error">{{ modeStatus.message }}</span>
     </div>
@@ -396,5 +411,9 @@ watch(() => props.records.length, (newLen, oldLen) => {
 .dispose-form span {
   color: #93c5fd;
   font-size: 13px;
+}
+
+.calibration-warning {
+  color: #fbbf24;
 }
 </style>

@@ -30,7 +30,7 @@ class DinoReferenceDetector(AnomalyDetector):
         top_fraction=0.005,
         camera_change_ratio=0.30,
         camera_change_frames=3,
-        allow_background_vehicles=False,
+        allow_background_vehicles=True,
         min_thin_side=18,
         max_thin_aspect=4.0,
         feature_extractor: Callable | None = None,
@@ -74,6 +74,9 @@ class DinoReferenceDetector(AnomalyDetector):
         self.needs_recalibration = False
         self.last_heat_score = 0.0
         self.last_foreground_ratio = 0.0
+        self.last_background_vehicle_ratio = 0.0
+        self.last_background_valid_ratio = 0.0
+        self.last_background_skip_reason = None
 
         if self.feature_extractor is None and self.model is None:
             self.model = self._load_model()
@@ -216,9 +219,26 @@ class DinoReferenceDetector(AnomalyDetector):
             )
 
     def update_background(self, frame=None, road_mask=None, vehicle_bboxes=None):
+        self.last_background_skip_reason = None
+        self.last_background_vehicle_ratio = 0.0
+        self.last_background_valid_ratio = 0.0
         if frame is None or frame.size == 0:
+            self.last_background_skip_reason = "empty_frame"
             return False
+
+        road_scope = self._build_road_scope(frame.shape[:2], road_mask)
+        if road_scope is None:
+            road_scope = np.full(frame.shape[:2], 255, dtype=np.uint8)
+        vehicle_mask = self._build_vehicle_mask(vehicle_bboxes, frame.shape)
+        self.last_background_vehicle_ratio = self._vehicle_mask_ratio(
+            vehicle_mask,
+            road_scope,
+        )
         if vehicle_bboxes and not self.allow_background_vehicles:
+            self.last_background_skip_reason = "vehicles_not_allowed"
+            return False
+        if self._vehicle_mask_too_large(vehicle_mask, road_scope):
+            self.last_background_skip_reason = "vehicle_mask_too_large"
             return False
 
         features = self._extract_features(frame)
@@ -228,7 +248,9 @@ class DinoReferenceDetector(AnomalyDetector):
             road_mask,
             vehicle_bboxes,
         )
-        if float(validity.mean().item()) < 0.10:
+        self.last_background_valid_ratio = float(validity.mean().item())
+        if self.last_background_valid_ratio < 0.10:
+            self.last_background_skip_reason = "insufficient_visible_road"
             return False
 
         reference = self._reference_features()
@@ -339,3 +361,6 @@ class DinoReferenceDetector(AnomalyDetector):
         self.needs_recalibration = False
         self.last_heat_score = 0.0
         self.last_foreground_ratio = 0.0
+        self.last_background_vehicle_ratio = 0.0
+        self.last_background_valid_ratio = 0.0
+        self.last_background_skip_reason = None

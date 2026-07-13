@@ -319,11 +319,52 @@ class DinoReferenceDetectorTest(unittest.TestCase):
         self.assertTrue(processor.detector.needs_recalibration)
         self.assertEqual([], processor.get_current_results())
 
-    def test_reference_calibration_skips_vehicle_frames(self):
+    def test_reference_calibration_masks_moderate_vehicle(self):
         detector = DinoReferenceDetector(
             feature_extractor=self.fake_features,
             device="cpu",
             use_default_road_scope=False,
+            max_background_vehicle_ratio=0.65,
+        )
+
+        learned = detector.update_background(
+            self.background,
+            road_mask=self.road_mask,
+            vehicle_bboxes=[[100, 80, 180, 170]],
+        )
+
+        self.assertTrue(learned)
+        self.assertEqual(1, detector.background_frames)
+        self.assertGreater(detector.last_background_vehicle_ratio, 0.0)
+        self.assertIsNone(detector.last_background_skip_reason)
+
+    def test_reference_calibration_skips_heavily_occluded_frame(self):
+        detector = DinoReferenceDetector(
+            feature_extractor=self.fake_features,
+            device="cpu",
+            use_default_road_scope=False,
+            max_background_vehicle_ratio=0.20,
+        )
+
+        learned = detector.update_background(
+            self.background,
+            road_mask=self.road_mask,
+            vehicle_bboxes=[[20, 30, 300, 220]],
+        )
+
+        self.assertFalse(learned)
+        self.assertEqual(0, detector.background_frames)
+        self.assertEqual(
+            "vehicle_mask_too_large",
+            detector.last_background_skip_reason,
+        )
+
+    def test_reference_strict_calibration_still_rejects_vehicles(self):
+        detector = DinoReferenceDetector(
+            feature_extractor=self.fake_features,
+            device="cpu",
+            use_default_road_scope=False,
+            allow_background_vehicles=False,
         )
 
         learned = detector.update_background(
@@ -333,7 +374,7 @@ class DinoReferenceDetectorTest(unittest.TestCase):
         )
 
         self.assertFalse(learned)
-        self.assertEqual(0, detector.background_frames)
+        self.assertEqual("vehicles_not_allowed", detector.last_background_skip_reason)
 
 
 if __name__ == "__main__":
