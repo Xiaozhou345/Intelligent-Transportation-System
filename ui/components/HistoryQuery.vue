@@ -114,16 +114,62 @@ const formatTime = (timestamp) => {
 
 const formatDetail = (event) => {
   const data = event.data || {}
-  if (event.event_type === 'plate_recognition') return data.plate_number || '-'
-  if (event.event_type === 'vehicle_detection') return `${data.vehicle_type || 'vehicle'} ${Math.round((data.confidence || 0) * 100)}%`
-  if (event.event_type === 'illegal_parking') return `车辆${data.track_id || '-'} 停留${Math.round(data.stay_time || 0)}秒`
-  if (event.event_type === 'road_anomaly') return `${data.anomaly_type || '-'} / ${data.affected_lane || '-'}`
-  if (event.event_type === 'traffic_density') return `区域 ${Array.isArray(data.regions) ? data.regions.length : 0} 个`
-  if (event.event_type === 'video_overlay') {
-    return `目标 ${['vehicles', 'plates', 'illegal_parking', 'road_anomalies'].reduce((sum, key) => sum + (Array.isArray(data[key]) ? data[key].length : 0), 0)} 个`
+
+  if (event.event_type === 'plate_recognition') {
+    // 车牌识别：显示车牌号
+    return event.plate_number || data.plate_number || '-'
   }
-  if (event.event_type === 'alarm_disposition') return `${data.operator || '-'} / ${data.note || '已处理'}`
-  return event.summary || '-'
+
+  if (event.event_type === 'vehicle_detection') {
+    // 车辆检测：显示车辆类型和置信度
+    const vehicleType = data.vehicle_type || data.class_name || '车辆'
+    const confidence = data.confidence ? `${Math.round(data.confidence * 100)}%` : ''
+    const trackId = data.track_id ? ` [ID:${data.track_id}]` : ''
+    return `${vehicleType} ${confidence}${trackId}`.trim()
+  }
+
+  if (event.event_type === 'illegal_parking') {
+    // 违停告警：显示车辆信息和停留时间
+    const trackId = data.track_id || '-'
+    const stayTime = data.stay_time ? Math.round(data.stay_time) : 0
+    const plate = data.plate_number || event.plate_number || ''
+    return plate ? `${plate} 停留${stayTime}秒` : `车辆${trackId} 停留${stayTime}秒`
+  }
+
+  if (event.event_type === 'road_anomaly') {
+    // 道路异常：显示异常类型和受影响车道
+    const anomalyType = data.anomaly_type || data.type || '异常'
+    const lane = data.affected_lane || data.lane || '-'
+    const severity = data.severity ? ` (${data.severity})` : ''
+    return `${anomalyType} / 车道${lane}${severity}`
+  }
+
+  if (event.event_type === 'traffic_density') {
+    // 拥堵分析：显示拥堵区域数量和等级
+    const regionCount = Array.isArray(data.regions) ? data.regions.length : (data.region_count || 0)
+    const level = data.congestion_level || ''
+    return level ? `${level} / ${regionCount}个区域` : `${regionCount}个区域`
+  }
+
+  if (event.event_type === 'video_overlay') {
+    // 画框快照：显示各类目标数量
+    const vehicles = Array.isArray(data.vehicles) ? data.vehicles.length : 0
+    const plates = Array.isArray(data.plates) ? data.plates.length : 0
+    const parking = Array.isArray(data.illegal_parking) ? data.illegal_parking.length : 0
+    const anomalies = Array.isArray(data.road_anomalies) ? data.road_anomalies.length : 0
+    const total = vehicles + plates + parking + anomalies
+    return `车辆${vehicles} 车牌${plates} 违停${parking} 异常${anomalies} (共${total})`
+  }
+
+  if (event.event_type === 'alarm_disposition') {
+    // 告警处置：显示处理人和备注
+    const operator = data.operator || '-'
+    const note = data.note || '已处理'
+    return `${operator} / ${note}`
+  }
+
+  // 其他类型：显示摘要或原始数据的描述
+  return event.summary || data.description || data.message || '-'
 }
 </script>
 
