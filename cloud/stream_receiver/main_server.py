@@ -563,6 +563,11 @@ def get_history_events():
                 cursor.execute(sql, params)
                 events = cursor.fetchall()
 
+                # 将 datetime 对象转换为字符串，避免时区转换
+                for event in events:
+                    if event.get('created_at'):
+                        event['created_at'] = event['created_at'].strftime('%Y-%m-%d %H:%M:%S')
+
                 # 查询总数
                 count_sql = f'SELECT COUNT(*) as total FROM recognition_event WHERE {where_sql}'
                 cursor.execute(count_sql, params[:-2])
