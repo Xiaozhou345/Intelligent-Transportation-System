@@ -164,6 +164,7 @@ def collect_system_status():
         "process_memory_mb": process_memory_mb,
         "uptime_seconds": int(time.time() - PROCESS_STARTED_AT),
         "platform": platform.platform(),
+        "models": video_processor.get_model_status(),
         "timestamp": datetime.now().isoformat(),
     }
 
@@ -705,6 +706,81 @@ def get_whitelist():
             "message": str(e),
             "data": []
         }), 500
+
+
+@app.route('/api/whitelist', methods=['POST'])
+def add_whitelist_entry():
+    """新增或更新车牌白名单。"""
+    try:
+        data = request.get_json(silent=True) or {}
+        plate_number = mysql_client._normalize_plate_number(data.get('plate_number') or data.get('plate'))
+        vehicle_type = (data.get('vehicle_type') or data.get('role') or 'visitor').strip() or 'visitor'
+        remark = data.get('remark')
+
+        if not plate_number:
+            return jsonify({"status": "error", "message": "车牌号不能为空"}), 400
+        if not mysql_client.check_connection():
+            return jsonify({"status": "error", "message": "数据库连接失败"}), 503
+
+        with mysql_client.get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute('''
+                INSERT INTO vehicle_whitelist (
+                    plate_number, vehicle_type, permission_status, remark, created_at, updated_at
+                ) VALUES (%s, %s, 1, %s, NOW(), NOW())
+                ON DUPLICATE KEY UPDATE
+                    vehicle_type = VALUES(vehicle_type),
+                    permission_status = 1,
+                    remark = VALUES(remark),
+                    updated_at = NOW()
+                ''', (plate_number, vehicle_type, remark))
+                conn.commit()
+
+                cursor.execute('''
+                SELECT id, plate_number, vehicle_type,
+                       permission_status, remark, created_at, updated_at
+                FROM vehicle_whitelist
+                WHERE plate_number = %s
+                LIMIT 1
+                ''', (plate_number,))
+                record = cursor.fetchone()
+
+        return jsonify({"status": "success", "data": record})
+
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/api/whitelist/<plate_number>/status', methods=['PATCH'])
+def update_whitelist_status(plate_number):
+    """启用或停用车牌白名单。"""
+    try:
+        data = request.get_json(silent=True) or {}
+        normalized_plate = mysql_client._normalize_plate_number(plate_number)
+        enabled = bool(data.get('enabled'))
+        permission_status = 1 if enabled else 0
+
+        if not normalized_plate:
+            return jsonify({"status": "error", "message": "车牌号不能为空"}), 400
+        if not mysql_client.check_connection():
+            return jsonify({"status": "error", "message": "数据库连接失败"}), 503
+
+        with mysql_client.get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute('''
+                UPDATE vehicle_whitelist
+                SET permission_status = %s, updated_at = NOW()
+                WHERE plate_number = %s
+                ''', (permission_status, normalized_plate))
+                if cursor.rowcount == 0:
+                    conn.rollback()
+                    return jsonify({"status": "error", "message": "白名单记录不存在"}), 404
+                conn.commit()
+
+        return jsonify({"status": "success", "data": {"plate_number": normalized_plate, "permission_status": permission_status}})
+
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 @app.route('/api/config', methods=['GET'])

@@ -2,9 +2,15 @@
 import { reactive, ref, onMounted, onUnmounted } from 'vue'
 import { ElButton, ElDialog, ElForm, ElFormItem, ElInput, ElMessage, ElTable, ElTableColumn, ElTag } from 'element-plus'
 
-const emit = defineEmits(['send-command'])
+const props = defineProps({
+  serverUrl: {
+    type: String,
+    required: true
+  }
+})
 
 const whitelist = ref([])
+const submitting = ref(false)
 
 const showDialog = ref(false)
 const form = reactive({
@@ -13,17 +19,15 @@ const form = reactive({
 })
 
 // 从数据库加载白名单
-const loadWhitelist = (data) => {
-  if (data && data.length > 0) {
-    whitelist.value = data.map(item => ({
-      id: item.id,
-      plate: item.plate_number,
-      role: item.vehicle_type || 'visitor',
-      status: item.permission_status === 1 ? 'enabled' : 'disabled',
-      remark: item.remark
-    }))
-    console.log(`✅ WhitelistManager 加载了 ${whitelist.value.length} 条白名单`)
-  }
+const loadWhitelist = (data = []) => {
+  whitelist.value = data.map(item => ({
+    id: item.id,
+    plate: item.plate_number,
+    role: item.vehicle_type || 'visitor',
+    status: item.permission_status === 1 ? 'enabled' : 'disabled',
+    remark: item.remark
+  }))
+  console.log(`✅ WhitelistManager 加载了 ${whitelist.value.length} 条白名单`)
 }
 
 onMounted(() => {
@@ -49,33 +53,70 @@ const resetForm = () => {
   form.role = ''
 }
 
-const handleAdd = () => {
-  if (!form.plate) {
+const handleAdd = async () => {
+  const plate = form.plate.trim().replace(/[-\s]/g, '').toUpperCase()
+  if (!plate) {
     ElMessage.warning('请填写车牌号')
     return
   }
 
-  const record = {
-    plate: form.plate,
-    role: form.role || 'visitor',
-    status: 'enabled'
+  submitting.value = true
+  try {
+    const response = await fetch(`${props.serverUrl}/api/whitelist`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        plate_number: plate,
+        vehicle_type: form.role || 'visitor'
+      })
+    })
+    const result = await response.json()
+    if (!response.ok || result.status !== 'success') {
+      throw new Error(result.message || '新增白名单失败')
+    }
+
+    const record = {
+      id: result.data.id,
+      plate: result.data.plate_number,
+      role: result.data.vehicle_type || 'visitor',
+      status: result.data.permission_status === 1 ? 'enabled' : 'disabled',
+      remark: result.data.remark
+    }
+    const existingIndex = whitelist.value.findIndex(item => item.plate === record.plate)
+    if (existingIndex >= 0) {
+      whitelist.value[existingIndex] = record
+    } else {
+      whitelist.value.unshift(record)
+    }
+    resetForm()
+    showDialog.value = false
+    ElMessage.success('白名单已写入数据库')
+  } catch (error) {
+    ElMessage.error(error.message)
+  } finally {
+    submitting.value = false
   }
-  whitelist.value.unshift(record)
-  emit('send-command', {
-    command: 'update_whitelist',
-    data: record
-  })
-  resetForm()
-  showDialog.value = false
-  ElMessage.success('白名单已更新')
 }
 
-const toggleStatus = (row) => {
-  row.status = row.status === 'enabled' ? 'disabled' : 'enabled'
-  emit('send-command', {
-    command: 'update_whitelist_status',
-    data: row
-  })
+const toggleStatus = async (row) => {
+  const previousStatus = row.status
+  const nextStatus = previousStatus === 'enabled' ? 'disabled' : 'enabled'
+  row.status = nextStatus
+  try {
+    const response = await fetch(`${props.serverUrl}/api/whitelist/${encodeURIComponent(row.plate)}/status`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: nextStatus === 'enabled' })
+    })
+    const result = await response.json()
+    if (!response.ok || result.status !== 'success') {
+      throw new Error(result.message || '更新白名单状态失败')
+    }
+    ElMessage.success('白名单状态已更新')
+  } catch (error) {
+    row.status = previousStatus
+    ElMessage.error(error.message)
+  }
 }
 </script>
 
@@ -119,7 +160,7 @@ const toggleStatus = (row) => {
       </ElForm>
       <template #footer>
         <ElButton @click="showDialog = false">取消</ElButton>
-        <ElButton type="primary" @click="handleAdd">确定</ElButton>
+        <ElButton type="primary" :loading="submitting" @click="handleAdd">确定</ElButton>
       </template>
     </ElDialog>
   </section>

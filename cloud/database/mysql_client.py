@@ -182,15 +182,20 @@ def set_device_status(device_id: str, status: str, last_heartbeat=None):
     return True
 
 
+def _normalize_plate_number(plate_number: str) -> str:
+    return str(plate_number or '').strip().replace('-', '').replace(' ', '').upper()
+
+
 def get_whitelist_entry(plate_number: str) -> Optional[Dict[str, Any]]:
     if not check_connection():
         return None
 
+    normalized_plate = _normalize_plate_number(plate_number)
     with get_connection() as conn:
         with conn.cursor() as cursor:
             cursor.execute(
                 'SELECT * FROM vehicle_whitelist WHERE plate_number=%s LIMIT 1',
-                (plate_number,),
+                (normalized_plate,),
             )
             return cursor.fetchone()
 

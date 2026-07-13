@@ -113,6 +113,13 @@ class VideoProcessor:
         self.model_init_thread = None
         self.vehicle_conf = float(os.getenv("ITS_VEHICLE_CONF", "0.60"))
         self.plate_conf = float(os.getenv("ITS_PLATE_CONF", "0.20"))
+        self.model_status = {
+            "vehicle_detection": {"model": "模型加载中", "ready": False},
+            "plate_recognition": {"model": "模型加载中", "ready": False},
+            "traffic_density": {"model": "模型加载中", "ready": False},
+            "illegal_parking": {"model": "模型加载中", "ready": False},
+            "road_anomaly": {"model": "模型加载中", "ready": False},
+        }
 
         # 性能优化参数
         self.plate_recognition_skip = int(os.getenv("ITS_PLATE_RECOGNITION_SKIP", "1"))  # 改为 1，每帧都检测
@@ -246,6 +253,8 @@ class VideoProcessor:
     def _init_sandbox_ai(self):
         if os.getenv("ITS_ENABLE_SANDBOX_AI", "true").lower() != "true":
             print("沙盘AI检测已通过环境变量关闭")
+            for status in self.model_status.values():
+                status.update({"model": "AI检测已关闭", "ready": False})
             return
 
         try:
@@ -352,6 +361,11 @@ class VideoProcessor:
                 event_cooldown_frames=int(os.getenv("ITS_ANOMALY_EVENT_COOLDOWN", "30")),
                 max_current_results=int(os.getenv("ITS_ANOMALY_MAX_RESULTS", "3")),
             )
+            if self.anomaly_backend == "dino_reference":
+                anomaly_model = f"DINOv2 Reference ({os.getenv('ITS_DINO_MODEL', 'dinov2_vits14_reg')})"
+            else:
+                anomaly_model = "MOG2 Background"
+            self.model_status["road_anomaly"] = {"model": anomaly_model, "ready": True}
             print("✅ 沙盘道路异常检测已启用")
 
             # 初始化车道线检测器
@@ -367,9 +381,15 @@ class VideoProcessor:
             print(f"⚠️  沙盘道路异常检测初始化失败，将使用模拟降级: {str(e)}")
             self.anomaly_processor = None
             self.lane_detector = None
+            self.model_status["road_anomaly"] = {"model": "道路异常检测未启用", "ready": False}
+            self.model_status["traffic_density"] = {"model": "车辆计数规则", "ready": False}
 
         if self.disable_vehicle_mask:
             print("沙盘车辆掩膜已关闭，异常检测不会排除车辆框")
+            self.model_status["vehicle_detection"] = {"model": "车辆检测已关闭", "ready": False}
+            self.model_status["plate_recognition"] = {"model": "车牌识别未启用", "ready": False}
+            self.model_status["traffic_density"] = {"model": "车道统计规则", "ready": self.lane_detector is not None}
+            self.model_status["illegal_parking"] = {"model": "ByteTrack + 禁停规则", "ready": False}
             return
 
         try:
@@ -379,12 +399,25 @@ class VideoProcessor:
             yolo_path = sandbox_model_path if os.path.exists(sandbox_model_path) else default_model_path
             if not os.path.exists(yolo_path):
                 print("⚠️  未找到车辆检测权重，道路异常检测将不使用车辆掩膜")
+                self.model_status["vehicle_detection"] = {"model": "车辆检测权重未找到", "ready": False}
+                self.model_status["traffic_density"] = {"model": "车道统计规则", "ready": self.lane_detector is not None}
+                self.model_status["illegal_parking"] = {"model": "ByteTrack + 禁停规则", "ready": False}
                 return
 
             self.vehicle_detector = VehicleDetector(
                 model_path=yolo_path,
                 conf_threshold=self.vehicle_conf,
             )
+            vehicle_model_name = os.path.basename(yolo_path)
+            self.model_status["vehicle_detection"] = {"model": vehicle_model_name, "ready": True}
+            self.model_status["traffic_density"] = {
+                "model": f"{vehicle_model_name} + LaneDetector + 阈值规则",
+                "ready": self.lane_detector is not None,
+            }
+            self.model_status["illegal_parking"] = {
+                "model": f"{vehicle_model_name} + ByteTrack + 禁停规则",
+                "ready": True,
+            }
             print("✅ 共享车辆检测已启用（服务于拥堵/违停/异常检测）")
 
             plate_model_path = os.path.join(AI_MODELS_DIR, "plate_detection", "sandbox_plate_best.pt")
@@ -393,6 +426,10 @@ class VideoProcessor:
                     model_path=plate_model_path,
                     conf_threshold=self.plate_conf,
                 )
+                self.model_status["plate_recognition"] = {
+                    "model": f"{os.path.basename(plate_model_path)} + OCR加载中",
+                    "ready": False,
+                }
                 print("✅ 共享车牌检测已启用（服务于视频叠加显示）")
 
                 # 尝试加载车牌识别模型（LPRNet）
@@ -419,6 +456,10 @@ class VideoProcessor:
                             print(f"✅ 车牌识别（LPRNet）已启用: {path}")
                             lprnet_path = path
                             lprnet_load_success = True
+                            self.model_status["plate_recognition"] = {
+                                "model": f"{os.path.basename(plate_model_path)} + {os.path.basename(path)}",
+                                "ready": True,
+                            }
                             break
                         except Exception as e:
                             print(f"⚠️  模型加载失败 ({path}): {str(e)}")
@@ -432,12 +473,21 @@ class VideoProcessor:
                             print(f"     - {path} {'[存在]' if os.path.exists(path) else '[不存在]'}")
                     print("⚠️  车牌识别功能不可用，车牌框将不显示车牌号")
                     self.plate_recognizer = None
+                    self.model_status["plate_recognition"] = {
+                        "model": f"{os.path.basename(plate_model_path)} + OCR未加载",
+                        "ready": True,
+                    }
             else:
                 print("⚠️  未找到车牌检测权重，视频叠加中的车牌框将为空")
+                self.model_status["plate_recognition"] = {"model": "车牌检测权重未找到", "ready": False}
         except Exception as e:
             print(f"⚠️  车辆检测初始化失败，道路异常检测将继续运行: {str(e)}")
             self.vehicle_detector = None
             self.plate_detector = None
+            self.model_status["vehicle_detection"] = {"model": "车辆检测初始化失败", "ready": False}
+            self.model_status["plate_recognition"] = {"model": "车牌识别初始化失败", "ready": False}
+            self.model_status["traffic_density"] = {"model": "车道统计规则", "ready": self.lane_detector is not None}
+            self.model_status["illegal_parking"] = {"model": "ByteTrack + 禁停规则", "ready": False}
 
     def _get_or_create_runtime_state(self, device_id, frame_shape=None):
         state = self.runtime_state.get(device_id)
@@ -702,6 +752,19 @@ class VideoProcessor:
         # 最多保留50条
         if len(self.plate_cache[device_id]) > 50:
             self.plate_cache[device_id] = self.plate_cache[device_id][-50:]
+
+    def _check_plate_whitelist(self, plate_number):
+        if not plate_number:
+            return False
+        normalized_plate = normalize_plate_number(plate_number) if normalize_plate_number else str(plate_number).strip().replace('-', '').replace(' ', '').upper()
+        if not normalized_plate:
+            return False
+        try:
+            row = mysql_client.get_whitelist_entry(normalized_plate)
+        except Exception as exc:
+            print(f"⚠️ 查询白名单失败: {exc}")
+            return False
+        return bool(row and int(row.get('permission_status', 0)) == 1)
 
     def _match_plate_number(self, device_id, bbox):
         """
@@ -1249,6 +1312,9 @@ class VideoProcessor:
                 if not plate_number:
                     plate_number = self._match_plate_number(device_id, bbox)
 
+                is_in_whitelist = self._check_plate_whitelist(plate_number)
+                decision = "allow" if is_in_whitelist else "deny"
+
                 # 构建plate_recognition事件（独立事件，用于车牌记录表）
                 # 注意：此事件与video_overlay.plates和vehicle_detection.plate_number用途不同：
                 # - plate_recognition：独立的车牌识别记录，发送到PlateRecognitionPanel
@@ -1263,9 +1329,8 @@ class VideoProcessor:
                     "data": {
                         "plate_number": plate_number,
                         "confidence": plate["confidence"],
-                        # 未来扩展字段（当前未实现白名单和决策逻辑）
-                        # "is_in_whitelist": False,
-                        # "decision": "unknown",
+                        "is_in_whitelist": is_in_whitelist,
+                        "decision": decision,
                     },
                 })
 
@@ -2295,6 +2360,9 @@ class VideoProcessor:
                 )
 
         return frame
+
+    def get_model_status(self):
+        return dict(self.model_status)
 
     def get_traffic_thresholds(self, device_id=None):
         if device_id and device_id in self.runtime_state:

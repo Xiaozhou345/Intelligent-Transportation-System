@@ -74,11 +74,11 @@ const dashboardStats = reactive({
 const deviceList = ref([])
 
 const sceneTabs = [
-  { label: '车辆检测', value: 'vehicle_detection', model: 'YOLOv11s' },
-  { label: '车牌识别', value: 'plate_recognition', model: 'PlateOCR-v2' },
-  { label: '拥堵热力', value: 'traffic_density', model: 'DensityMap' },
-  { label: '违停检测', value: 'illegal_parking', model: 'Tracker + Rule' },
-  { label: '道路异常', value: 'road_anomaly', model: 'AnomalyNet' }
+  { label: '车辆检测', value: 'vehicle_detection' },
+  { label: '车牌识别', value: 'plate_recognition' },
+  { label: '拥堵热力', value: 'traffic_density' },
+  { label: '违停检测', value: 'illegal_parking' },
+  { label: '道路异常', value: 'road_anomaly' }
 ]
 
 const statusMap = {
@@ -106,6 +106,13 @@ const roleTextMap = {
 
 const activeSceneMeta = computed(() => {
   return sceneTabs.find(scene => scene.value === activeScene.value) || sceneTabs[0]
+})
+
+const currentModelName = computed(() => {
+  const modelInfo = systemStatus.value.models?.[activeScene.value]
+  if (modelInfo?.model) return modelInfo.model
+  if (systemStatus.value.models) return '后端未启用'
+  return '等待后端状态'
 })
 
 const onlineDeviceCount = computed(() => deviceList.value.filter(device => device.status === 'online').length)
@@ -839,7 +846,7 @@ onUnmounted(() => {
           <ElTabPane v-for="scene in sceneTabs" :key="scene.value" :label="scene.label" :name="scene.value" />
         </ElTabs>
         <div class="scene-meta">
-          <span>当前模型：{{ activeSceneMeta.model }}</span>
+          <span>当前模型：{{ currentModelName }}</span>
           <span>检测结果：{{ currentDetectionCount }}</span>
           <span>模式：{{ websocketManager.isSimulating() ? '演示数据' : '真实接入' }}</span>
         </div>
@@ -919,7 +926,7 @@ onUnmounted(() => {
               :video-src="liveVideoSrc"
               :webrtc-src="liveWebrtcSrc"
               :analysis-mode="activeSceneMeta.label"
-              :model-name="activeSceneMeta.model"
+              :model-name="currentModelName"
               :detection-count="currentDetectionCount"
               :latency="latestLatency"
               :stream-status="streamStatusText"
@@ -974,7 +981,7 @@ onUnmounted(() => {
       <section :class="['bottom-grid', canConfigure ? 'bottom-grid-3' : 'bottom-grid-2']">
         <HistoryQuery :cloud-server-url="CLOUD_SERVER_URL" />
         <AlarmWorkbench :records="alarmDispositionRecords" />
-        <WhitelistManager v-if="canConfigure" @send-command="handleSendCommand" />
+        <WhitelistManager v-if="canConfigure" :server-url="CLOUD_SERVER_URL" />
       </section>
     </main>
   </div>
