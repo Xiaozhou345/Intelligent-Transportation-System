@@ -571,9 +571,12 @@ const handleSendCommand = (command) => {
 const routeEvent = (data) => {
   updateLatency(data.timestamp)
 
-  // 过滤掉系统状态消息，不显示在事件流中
-  // 系统状态会静默更新仪表盘，但不需要在事件流中显示
-  if (data.event_type !== 'system_status') {
+  // 过滤掉系统级消息，不显示在事件流中
+  // - system_status: 系统状态会静默更新仪表盘
+  // - connection_status: 连接状态是欢迎消息，无需显示
+  // - devices_list: 设备列表更新，不是业务事件
+  const systemMessages = ['system_status', 'connection_status', 'devices_list']
+  if (!systemMessages.includes(data.event_type)) {
     addEventRecord(data)
   }
 
