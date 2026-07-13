@@ -20,6 +20,55 @@ if AI_MODELS_DIR not in sys.path:
 from anomaly_processor import RoadAnomalyProcessor
 from anomaly_detection.anomaly_detector import AnomalyDetector
 from anomaly_detection.dino_reference_detector import DinoReferenceDetector
+from video_processor import VideoProcessor
+
+
+class _BackgroundCounter:
+    def __init__(self, background_frames):
+        self.background_frames = background_frames
+
+
+class VideoProcessorAnomalyModeTest(unittest.TestCase):
+    def build_processor(self, detector_frames, state_frames):
+        processor = VideoProcessor.__new__(VideoProcessor)
+        processor.anomaly_processor = _BackgroundCounter(detector_frames)
+        processor.runtime_defaults = {
+            "active_scene": "road_anomaly",
+            "anomaly_mode": "background_learning",
+            "anomaly_min_background_frames": 6,
+        }
+        processor.runtime_state = {
+            "mobile_001": {
+                "active_scene": "road_anomaly",
+                "anomaly_mode": "background_learning",
+                "anomaly_background_frames": state_frames,
+            }
+        }
+        return processor
+
+    def test_detection_start_uses_detector_background_count(self):
+        processor = self.build_processor(detector_frames=6, state_frames=0)
+
+        result = processor.start_anomaly_detection(device_id="mobile_001")
+
+        self.assertEqual("success", result["status"])
+        self.assertEqual("detecting", result["mode"])
+        self.assertEqual(
+            6,
+            processor.runtime_state["mobile_001"]["anomaly_background_frames"],
+        )
+
+    def test_detection_start_rejects_stale_high_ui_count(self):
+        processor = self.build_processor(detector_frames=2, state_frames=20)
+
+        result = processor.start_anomaly_detection(device_id="mobile_001")
+
+        self.assertEqual("error", result["status"])
+        self.assertEqual("background_learning", result["mode"])
+        self.assertEqual(
+            2,
+            processor.runtime_state["mobile_001"]["anomaly_background_frames"],
+        )
 
 
 class RoadAnomalyProcessorTest(unittest.TestCase):
@@ -280,6 +329,8 @@ class DinoReferenceDetectorTest(unittest.TestCase):
 
         self.assertEqual(1, len(events))
         self.assertEqual("warning", events[0]["status"])
+        self.assertEqual("warning", processor.detector.last_detection_reason)
+        self.assertEqual(1, processor.detector.last_warning_count)
 
     def test_reference_vehicle_mask_suppresses_change(self):
         processor = self.build_processor()
@@ -317,9 +368,10 @@ class DinoReferenceDetectorTest(unittest.TestCase):
             )
 
         self.assertTrue(processor.detector.needs_recalibration)
+        self.assertEqual("camera_change", processor.detector.last_detection_reason)
         self.assertEqual([], processor.get_current_results())
 
-    def test_reference_calibration_skips_vehicle_frames(self):
+    def test_reference_calibration_masks_moderate_vehicle(self):
         detector = DinoReferenceDetector(
             feature_extractor=self.fake_features,
             device="cpu",
@@ -332,8 +384,82 @@ class DinoReferenceDetectorTest(unittest.TestCase):
             vehicle_bboxes=[[100, 80, 180, 170]],
         )
 
+        self.assertTrue(learned)
+        self.assertEqual(1, detector.background_frames)
+        self.assertGreater(detector.last_background_vehicle_ratio, 0.0)
+        self.assertIsNone(detector.last_background_skip_reason)
+
+    def test_reference_calibration_skips_heavily_occluded_frame(self):
+        detector = DinoReferenceDetector(
+            feature_extractor=self.fake_features,
+            device="cpu",
+            use_default_road_scope=False,
+        )
+
+        learned = detector.update_background(
+            self.background,
+            road_mask=self.road_mask,
+            vehicle_bboxes=[[20, 30, 300, 220]],
+        )
+
         self.assertFalse(learned)
         self.assertEqual(0, detector.background_frames)
+        self.assertEqual(
+            "insufficient_visible_road",
+            detector.last_background_skip_reason,
+        )
+
+    def test_reference_legacy_strict_flag_no_longer_rejects_vehicle(self):
+        detector = DinoReferenceDetector(
+            feature_extractor=self.fake_features,
+            device="cpu",
+            use_default_road_scope=False,
+            allow_background_vehicles=False,
+        )
+
+        learned = detector.update_background(
+            self.background,
+            road_mask=self.road_mask,
+            vehicle_bboxes=[[100, 80, 180, 170]],
+        )
+
+        self.assertTrue(learned)
+        self.assertEqual(1, detector.background_frames)
+        self.assertIsNone(detector.last_background_skip_reason)
+
+    def test_reference_calibration_uses_road_relative_visible_ratio(self):
+        detector = DinoReferenceDetector(
+            feature_extractor=self.fake_features,
+            device="cpu",
+            use_default_road_scope=False,
+        )
+        narrow_road = np.zeros_like(self.road_mask)
+        cv2.rectangle(narrow_road, (120, 90), (190, 150), 255, -1)
+
+        learned = detector.update_background(
+            self.background,
+            road_mask=narrow_road,
+            vehicle_bboxes=[],
+        )
+
+        self.assertTrue(learned)
+        self.assertEqual(1, detector.background_frames)
+        self.assertGreaterEqual(detector.last_background_valid_ratio, 0.99)
+
+    def test_reference_warmup_does_not_create_background_reference(self):
+        detector = DinoReferenceDetector(
+            feature_extractor=self.fake_features,
+            device="cpu",
+            use_default_road_scope=False,
+        )
+
+        elapsed_ms = detector.warmup()
+
+        self.assertIsNotNone(elapsed_ms)
+        self.assertTrue(detector.model_warmed_up)
+        self.assertEqual(0, detector.background_frames)
+        self.assertIsNone(detector.reference_sum)
+        self.assertIsNone(detector.reference_count)
 
 
 if __name__ == "__main__":

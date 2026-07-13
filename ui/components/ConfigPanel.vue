@@ -7,7 +7,7 @@ const emit = defineEmits(['send-command'])
 const showDialog = ref(false)
 const currentTab = ref('detection')
 
-const config = reactive({
+const defaultConfig = {
   detection: {
     vehicleConf: 0.5,
     plateConf: 0.2,
@@ -31,7 +31,9 @@ const config = reactive({
     congestionMax: 10,
     anomalyStaticFrames: 3
   }
-})
+}
+
+const config = reactive(JSON.parse(JSON.stringify(defaultConfig)))
 
 const sendCommand = (command, data = {}) => {
   const payload = { command, ...data }
@@ -46,13 +48,8 @@ const handleSaveConfig = (tabKey) => {
 }
 
 const handleResetConfig = (tabKey) => {
-  const defaults = {
-    detection: { vehicleConf: 0.5, plateConf: 0.2, iouThresh: 0.45, useCuda: true, useFp16: true, vehicleImgsz: 960, plateImgsz: 640, frameSkip: 1 },
-    tracking: { trackThresh: 0.5, matchThresh: 0.8, maxTimeLost: 30, parkingThreshold: 30, kalmanNoise: 0.05 },
-    business: { smoothMax: 3, slowMax: 6, congestionMax: 10, anomalyStaticFrames: 3 }
-  }
-  Object.assign(config[tabKey], defaults[tabKey])
-  ElMessage.info('已重置为默认值')
+  Object.assign(config[tabKey], defaultConfig[tabKey])
+  ElMessage.info('已重置为默认配置')
 }
 </script>
 

@@ -80,6 +80,30 @@ const getModeText = (mode) => {
   return '未标定'
 }
 
+const calibrationReasonMap = {
+  insufficient_visible_road: '有效道路几乎全部被遮挡',
+  empty_frame: '视频帧无效'
+}
+
+const getCalibrationReason = (reason) => calibrationReasonMap[reason] || ''
+
+const detectionReasonMap = {
+  not_calibrated: '等待背景标定',
+  empty_frame: '等待有效视频帧',
+  below_heat_threshold: '画面正常',
+  no_component: '变化区域未达到目标条件',
+  candidate_tracking: '候选目标确认中',
+  warning: '已确认异常目标',
+  camera_change: '镜头变化，正在重新标定'
+}
+
+const getDetectionReason = (reason) => detectionReasonMap[reason] || ''
+
+const formatScore = (value) => {
+  const score = Number(value)
+  return Number.isFinite(score) ? score.toFixed(3) : '-'
+}
+
 const getModeType = (mode) => {
   if (mode === 'background_learning') return 'warning'
   if (mode === 'detecting') return 'success'
@@ -103,7 +127,7 @@ const startBackgroundLearning = () => {
 }
 
 const startDetection = () => {
-  sendAnomalyCommand('anomaly_detection_start', '已进入检测模式，现在可以放置异物')
+  sendAnomalyCommand('anomaly_detection_start', '检测启动指令已发送，等待后端确认')
 }
 
 const resetCalibration = () => {
@@ -178,8 +202,13 @@ watch(() => props.records.length, (newLen, oldLen) => {
       <ElButton type="warning" size="small" :disabled="!canOperate" @click="startBackgroundLearning">
         初始化背景
       </ElButton>
-      <ElButton type="danger" size="small" :disabled="!canOperate" @click="startDetection">
-        开始检测
+      <ElButton
+        type="danger"
+        size="small"
+        :disabled="!canOperate || modeStatus.mode === 'detecting'"
+        @click="startDetection"
+      >
+        {{ modeStatus.mode === 'detecting' ? '检测中' : '开始检测' }}
       </ElButton>
       <ElButton size="small" :disabled="!canOperate" @click="resetCalibration">
         重新标定
@@ -189,6 +218,24 @@ watch(() => props.records.length, (newLen, oldLen) => {
       </span>
       <span v-if="modeStatus.skipped_frames">
         跳过 {{ modeStatus.skipped_frames }}
+      </span>
+      <span v-if="modeStatus.mode === 'detecting'">
+        分数 {{ formatScore(modeStatus.last_heat_score) }}/{{ formatScore(modeStatus.heat_threshold) }}
+      </span>
+      <span v-if="modeStatus.mode === 'detecting' && modeStatus.last_candidate_count !== undefined">
+        候选 {{ modeStatus.last_candidate_count }}
+      </span>
+      <span
+        v-if="modeStatus.mode === 'detecting' && getDetectionReason(modeStatus.last_detection_reason)"
+        :class="{ 'detection-warning': modeStatus.last_detection_reason === 'camera_change' }"
+      >
+        {{ getDetectionReason(modeStatus.last_detection_reason) }}
+      </span>
+      <span
+        v-if="modeStatus.last_calibration_status === 'skipped' && getCalibrationReason(modeStatus.last_calibration_reason)"
+        class="calibration-warning"
+      >
+        {{ getCalibrationReason(modeStatus.last_calibration_reason) }}
       </span>
       <span v-if="modeStatus.status === 'error'" class="calibration-error">{{ modeStatus.message }}</span>
     </div>
@@ -348,6 +395,10 @@ watch(() => props.records.length, (newLen, oldLen) => {
   flex-basis: 100%;
 }
 
+.calibration-actions .detection-warning {
+  color: #fbbf24;
+}
+
 .anomaly-row-highlight {
   background-color: #fef0f0 !important;
 }
@@ -396,5 +447,9 @@ watch(() => props.records.length, (newLen, oldLen) => {
 .dispose-form span {
   color: #93c5fd;
   font-size: 13px;
+}
+
+.calibration-warning {
+  color: #fbbf24;
 }
 </style>

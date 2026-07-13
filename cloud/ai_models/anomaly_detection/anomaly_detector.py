@@ -334,6 +334,12 @@ class AnomalyDetector:
         if self.max_background_vehicle_ratio <= 0:
             return False
 
+        return self._vehicle_mask_ratio(vehicle_mask, scope) > self.max_background_vehicle_ratio
+
+    @staticmethod
+    def _vehicle_mask_ratio(vehicle_mask, scope):
+        """Return the fraction of the active road scope covered by vehicles."""
+
         if scope is not None and cv2.countNonZero(scope) > 0:
             active_pixels = cv2.countNonZero(scope)
             masked_pixels = cv2.countNonZero(cv2.bitwise_and(vehicle_mask, scope))
@@ -341,7 +347,9 @@ class AnomalyDetector:
             active_pixels = vehicle_mask.shape[0] * vehicle_mask.shape[1]
             masked_pixels = cv2.countNonZero(vehicle_mask)
 
-        return active_pixels > 0 and (masked_pixels / float(active_pixels)) > self.max_background_vehicle_ratio
+        if active_pixels <= 0:
+            return 0.0
+        return masked_pixels / float(active_pixels)
 
     def _estimate_road_fill_color(self, frame, scope, vehicle_mask):
         sample_mask = cv2.bitwise_not(vehicle_mask)

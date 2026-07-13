@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import nullcontext
 import os
 from pathlib import Path
+import time
 from typing import Callable
 
 import cv2
@@ -23,14 +24,15 @@ class DinoReferenceDetector(AnomalyDetector):
         model_name="dinov2_vits14_reg",
         image_size=518,
         local_radius=1,
-        heat_threshold=0.18,
+        heat_threshold=0.14,
         pixel_threshold=0.14,
         threshold_quantile=0.99,
         threshold_margin=1.25,
         top_fraction=0.005,
         camera_change_ratio=0.30,
         camera_change_frames=3,
-        allow_background_vehicles=False,
+        allow_background_vehicles=True,
+        min_background_valid_ratio=0.10,
         min_thin_side=18,
         max_thin_aspect=4.0,
         feature_extractor: Callable | None = None,
@@ -57,7 +59,13 @@ class DinoReferenceDetector(AnomalyDetector):
         self.top_fraction = min(0.25, max(0.0001, float(top_fraction)))
         self.camera_change_ratio = min(0.95, max(0.05, float(camera_change_ratio)))
         self.camera_change_frames = max(1, int(camera_change_frames))
+        # Kept for compatibility with older callers. DINOv2 calibration now
+        # always masks vehicle patches instead of rejecting the whole frame.
         self.allow_background_vehicles = bool(allow_background_vehicles)
+        self.min_background_valid_ratio = min(
+            0.95,
+            max(0.01, float(min_background_valid_ratio)),
+        )
         self.min_thin_side = max(0, int(min_thin_side))
         self.max_thin_aspect = max(1.0, float(max_thin_aspect))
 
@@ -74,11 +82,22 @@ class DinoReferenceDetector(AnomalyDetector):
         self.needs_recalibration = False
         self.last_heat_score = 0.0
         self.last_foreground_ratio = 0.0
+        self.last_background_vehicle_ratio = 0.0
+        self.last_background_valid_ratio = 0.0
+        self.last_background_skip_reason = None
+        self.last_detection_reason = "not_calibrated"
+        self.last_candidate_count = 0
+        self.last_warning_count = 0
+        self.last_vehicle_mask_ratio = 0.0
+        self.model_warmed_up = self.feature_extractor is not None
+        self.model_warmup_ms = 0.0
 
         if self.feature_extractor is None and self.model is None:
             self.model = self._load_model()
         if self.model is not None:
             self.model.eval().to(self.device)
+            if os.getenv("ITS_WARMUP_MODELS", "true").lower() == "true":
+                self.warmup()
 
         print(
             "道路异常检测器初始化完成：DINOv2正常模板 + YOLO车辆掩膜 "
@@ -98,6 +117,30 @@ class DinoReferenceDetector(AnomalyDetector):
             trust_repo=True,
             force_reload=False,
         )
+
+    def warmup(self):
+        """Run first-use kernels before interactive background calibration."""
+        started_at = time.perf_counter()
+        warmup_width = max(32, int(os.getenv("ITS_WARMUP_WIDTH", "1280")))
+        warmup_height = max(32, int(os.getenv("ITS_WARMUP_HEIGHT", "720")))
+        dummy = np.zeros((warmup_height, warmup_width, 3), dtype=np.uint8)
+        try:
+            features = self._extract_features(dummy)
+            self._local_cosine_distance(features, features)
+            if self.device.type == "cuda":
+                torch.cuda.synchronize(self.device)
+            self.model_warmup_ms = (time.perf_counter() - started_at) * 1000
+            self.model_warmed_up = True
+            print(
+                f"DINOv2异常检测预热完成: {self.model_warmup_ms:.1f}ms "
+                f"(设备: {self.device.type}, 输入: {self.image_size}x{self.image_size})"
+            )
+            return self.model_warmup_ms
+        except Exception as exc:
+            self.model_warmed_up = False
+            self.model_warmup_ms = 0.0
+            print(f"DINOv2异常检测预热失败，将在首帧重试: {exc}")
+            return None
 
     def _extract_features(self, frame):
         if self.feature_extractor is not None:
@@ -138,20 +181,29 @@ class DinoReferenceDetector(AnomalyDetector):
             )[0]
         return torch_functional.normalize(features.float(), dim=1)
 
-    def _feature_validity(self, frame_shape, feature_shape, road_mask, vehicle_bboxes):
+    def _feature_masks(self, frame_shape, feature_shape, road_mask, vehicle_bboxes):
         road_scope = self._build_road_scope(frame_shape[:2], road_mask)
         if road_scope is None:
             road_scope = np.full(frame_shape[:2], 255, dtype=np.uint8)
         vehicle_mask = self._build_vehicle_mask(vehicle_bboxes, frame_shape)
         valid = cv2.bitwise_and(road_scope, cv2.bitwise_not(vehicle_mask))
         feature_height, feature_width = feature_shape
-        valid = cv2.resize(
-            valid,
-            (feature_width, feature_height),
-            interpolation=cv2.INTER_AREA,
-        )
-        valid = (valid >= 192).astype(np.float32)
-        return torch.from_numpy(valid).to(self.device).view(1, 1, feature_height, feature_width)
+
+        def resize_mask(mask):
+            resized = cv2.resize(
+                mask,
+                (feature_width, feature_height),
+                interpolation=cv2.INTER_AREA,
+            )
+            resized = (resized >= 192).astype(np.float32)
+            return torch.from_numpy(resized).to(self.device).view(
+                1,
+                1,
+                feature_height,
+                feature_width,
+            )
+
+        return resize_mask(valid), resize_mask(road_scope)
 
     def _reference_features(self):
         if self.reference_sum is None or self.reference_count is None:
@@ -216,19 +268,40 @@ class DinoReferenceDetector(AnomalyDetector):
             )
 
     def update_background(self, frame=None, road_mask=None, vehicle_bboxes=None):
+        self.last_background_skip_reason = None
+        self.last_background_vehicle_ratio = 0.0
+        self.last_background_valid_ratio = 0.0
         if frame is None or frame.size == 0:
-            return False
-        if vehicle_bboxes and not self.allow_background_vehicles:
+            self.last_background_skip_reason = "empty_frame"
             return False
 
+        road_scope = self._build_road_scope(frame.shape[:2], road_mask)
+        if road_scope is None:
+            road_scope = np.full(frame.shape[:2], 255, dtype=np.uint8)
+        vehicle_mask = self._build_vehicle_mask(vehicle_bboxes, frame.shape)
+        self.last_background_vehicle_ratio = self._vehicle_mask_ratio(
+            vehicle_mask,
+            road_scope,
+        )
         features = self._extract_features(frame)
-        validity = self._feature_validity(
+        validity, road_validity = self._feature_masks(
             frame.shape,
             features.shape[-2:],
             road_mask,
             vehicle_bboxes,
         )
-        if float(validity.mean().item()) < 0.10:
+        road_patch_count = float(road_validity.sum().item())
+        visible_patch_count = float(validity.sum().item())
+        self.last_background_valid_ratio = (
+            visible_patch_count / road_patch_count
+            if road_patch_count > 0
+            else 0.0
+        )
+        if (
+            road_patch_count < 4
+            or self.last_background_valid_ratio < self.min_background_valid_ratio
+        ):
+            self.last_background_skip_reason = "insufficient_visible_road"
             return False
 
         reference = self._reference_features()
@@ -253,9 +326,15 @@ class DinoReferenceDetector(AnomalyDetector):
 
     def detect(self, frame, vehicle_bboxes=None, road_mask=None):
         if frame is None or frame.size == 0:
+            self.last_detection_reason = "empty_frame"
+            self.last_candidate_count = 0
+            self.last_warning_count = 0
             return []
         reference = self._reference_features()
         if reference is None:
+            self.last_detection_reason = "not_calibrated"
+            self.last_candidate_count = 0
+            self.last_warning_count = 0
             return []
 
         features = self._extract_features(frame)
@@ -282,6 +361,10 @@ class DinoReferenceDetector(AnomalyDetector):
             np.where(reference_valid > 0.5, 255, 0).astype(np.uint8),
         )
         vehicle_mask = self._build_vehicle_mask(vehicle_bboxes, frame.shape)
+        self.last_vehicle_mask_ratio = self._vehicle_mask_ratio(
+            vehicle_mask,
+            road_scope,
+        )
         active_scope = cv2.bitwise_and(road_scope, cv2.bitwise_not(vehicle_mask))
         active_values = distance_np[active_scope > 0]
         self.last_heat_score, _ = self._distance_scores(active_values)
@@ -299,19 +382,36 @@ class DinoReferenceDetector(AnomalyDetector):
             self.camera_change_streak += 1
             if self.camera_change_streak >= self.camera_change_frames:
                 self.needs_recalibration = True
+            self.last_detection_reason = "camera_change"
+            self.last_candidate_count = 0
+            self.last_warning_count = 0
             return self._age_unmatched_tracks(set())
 
         self.camera_change_streak = 0
         if self.last_heat_score < self.heat_threshold:
+            self.last_detection_reason = "below_heat_threshold"
+            self.last_candidate_count = 0
+            self.last_warning_count = 0
             return self._age_unmatched_tracks(set())
 
         noisy_frame = self._foreground_too_large(foreground, active_scope)
-        return self._track_components(
+        results = self._track_components(
             foreground,
             frame=None,
             road_scope=active_scope,
             candidate_limit=1 if noisy_frame else None,
         )
+        self.last_candidate_count = len(results)
+        self.last_warning_count = sum(
+            result.get("status") == "warning" for result in results
+        )
+        if self.last_warning_count:
+            self.last_detection_reason = "warning"
+        elif self.last_candidate_count:
+            self.last_detection_reason = "candidate_tracking"
+        else:
+            self.last_detection_reason = "no_component"
+        return results
 
     def _remove_thin_artifacts(self, mask):
         if self.min_thin_side <= 0:
@@ -339,3 +439,10 @@ class DinoReferenceDetector(AnomalyDetector):
         self.needs_recalibration = False
         self.last_heat_score = 0.0
         self.last_foreground_ratio = 0.0
+        self.last_background_vehicle_ratio = 0.0
+        self.last_background_valid_ratio = 0.0
+        self.last_background_skip_reason = None
+        self.last_detection_reason = "not_calibrated"
+        self.last_candidate_count = 0
+        self.last_warning_count = 0
+        self.last_vehicle_mask_ratio = 0.0

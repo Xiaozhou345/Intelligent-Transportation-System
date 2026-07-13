@@ -2,7 +2,7 @@
 云端主服务器 - 集成HTTP API + WebSocket + 视频流处理
 提供设备管理、视频流接收和实时结果推送
 """
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, session
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 from device_manager import DeviceManager
@@ -19,6 +19,7 @@ import subprocess
 import time
 import sys
 from urllib.parse import urlparse
+import bcrypt
 
 # 添加父目录到Python路径以支持database模块导入
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -724,6 +725,288 @@ def get_system_config():
             "status": "error",
             "message": str(e),
             "data": {}
+        }), 500
+
+
+# ==================== 用户管理 API ====================
+
+@app.route('/api/users/login', methods=['POST'])
+def user_login():
+    """用户登录"""
+    try:
+        data = request.get_json()
+        username = data.get('username', '').strip()
+        password = data.get('password', '')
+
+        if not username or not password:
+            return jsonify({
+                "status": "error",
+                "message": "用户名和密码不能为空"
+            }), 400
+
+        from database import mysql_client
+
+        if not mysql_client or not mysql_client.pool:
+            return jsonify({
+                "status": "error",
+                "message": "数据库连接失败"
+            }), 503
+
+        with mysql_client.get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute('''
+                SELECT id, username, password_hash, role, status, last_login
+                FROM system_user
+                WHERE username = %s
+                ''', (username,))
+                user = cursor.fetchone()
+
+                if not user:
+                    return jsonify({
+                        "status": "error",
+                        "message": "用户名或密码错误"
+                    }), 401
+
+                if user['status'] != 1:
+                    return jsonify({
+                        "status": "error",
+                        "message": "账号已被禁用"
+                    }), 403
+
+                # 验证密码
+                if not bcrypt.checkpw(password.encode('utf-8'), user['password_hash'].encode('utf-8')):
+                    return jsonify({
+                        "status": "error",
+                        "message": "用户名或密码错误"
+                    }), 401
+
+                # 更新最后登录时间
+                cursor.execute('''
+                UPDATE system_user
+                SET last_login = NOW()
+                WHERE id = %s
+                ''', (user['id'],))
+                conn.commit()
+
+                return jsonify({
+                    "status": "success",
+                    "message": "登录成功",
+                    "data": {
+                        "id": user['id'],
+                        "username": user['username'],
+                        "role": user['role']
+                    }
+                })
+
+    except Exception as e:
+        print(f"登录错误: {e}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+
+@app.route('/api/users', methods=['GET'])
+def get_users():
+    """获取用户列表（仅管理员）"""
+    try:
+        from database import mysql_client
+
+        if not mysql_client or not mysql_client.pool:
+            return jsonify({
+                "status": "error",
+                "message": "数据库连接失败",
+                "data": []
+            }), 503
+
+        with mysql_client.get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute('''
+                SELECT id, username, role, status, last_login, created_at, updated_at
+                FROM system_user
+                ORDER BY created_at DESC
+                ''')
+                users = cursor.fetchall()
+
+                # 将 datetime 对象转换为字符串
+                for user in users:
+                    if user.get('last_login'):
+                        user['last_login'] = user['last_login'].strftime('%Y-%m-%d %H:%M:%S')
+                    if user.get('created_at'):
+                        user['created_at'] = user['created_at'].strftime('%Y-%m-%d %H:%M:%S')
+                    if user.get('updated_at'):
+                        user['updated_at'] = user['updated_at'].strftime('%Y-%m-%d %H:%M:%S')
+
+                return jsonify({
+                    "status": "success",
+                    "data": users
+                })
+
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e),
+            "data": []
+        }), 500
+
+
+@app.route('/api/users', methods=['POST'])
+def create_user():
+    """创建新用户（仅管理员）"""
+    try:
+        data = request.get_json()
+        username = data.get('username', '').strip()
+        password = data.get('password', '')
+        role = data.get('role', 'user')
+
+        if not username or not password:
+            return jsonify({
+                "status": "error",
+                "message": "用户名和密码不能为空"
+            }), 400
+
+        if role not in ['admin', 'user']:
+            return jsonify({
+                "status": "error",
+                "message": "角色必须是 admin 或 user"
+            }), 400
+
+        # 密码哈希
+        password_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+        from database import mysql_client
+
+        if not mysql_client or not mysql_client.pool:
+            return jsonify({
+                "status": "error",
+                "message": "数据库连接失败"
+            }), 503
+
+        with mysql_client.get_connection() as conn:
+            with conn.cursor() as cursor:
+                # 检查用户名是否已存在
+                cursor.execute('SELECT id FROM system_user WHERE username = %s', (username,))
+                if cursor.fetchone():
+                    return jsonify({
+                        "status": "error",
+                        "message": "用户名已存在"
+                    }), 409
+
+                # 插入新用户
+                cursor.execute('''
+                INSERT INTO system_user (username, password_hash, role, status)
+                VALUES (%s, %s, %s, 1)
+                ''', (username, password_hash, role))
+                conn.commit()
+
+                return jsonify({
+                    "status": "success",
+                    "message": "用户创建成功"
+                })
+
+    except Exception as e:
+        print(f"创建用户错误: {e}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+
+@app.route('/api/users/<int:user_id>', methods=['PUT'])
+def update_user(user_id):
+    """更新用户信息（仅管理员）"""
+    try:
+        data = request.get_json()
+        role = data.get('role')
+        status = data.get('status')
+        password = data.get('password')
+
+        from database import mysql_client
+
+        if not mysql_client or not mysql_client.pool:
+            return jsonify({
+                "status": "error",
+                "message": "数据库连接失败"
+            }), 503
+
+        with mysql_client.get_connection() as conn:
+            with conn.cursor() as cursor:
+                # 构建更新SQL
+                updates = []
+                params = []
+
+                if role and role in ['admin', 'user']:
+                    updates.append('role = %s')
+                    params.append(role)
+
+                if status is not None:
+                    updates.append('status = %s')
+                    params.append(1 if status else 0)
+
+                if password:
+                    password_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+                    updates.append('password_hash = %s')
+                    params.append(password_hash)
+
+                if not updates:
+                    return jsonify({
+                        "status": "error",
+                        "message": "没有要更新的字段"
+                    }), 400
+
+                params.append(user_id)
+                sql = f"UPDATE system_user SET {', '.join(updates)} WHERE id = %s"
+                cursor.execute(sql, params)
+                conn.commit()
+
+                return jsonify({
+                    "status": "success",
+                    "message": "用户信息更新成功"
+                })
+
+    except Exception as e:
+        print(f"更新用户错误: {e}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+
+@app.route('/api/users/<int:user_id>', methods=['DELETE'])
+def delete_user(user_id):
+    """删除用户（仅管理员）"""
+    try:
+        from database import mysql_client
+
+        if not mysql_client or not mysql_client.pool:
+            return jsonify({
+                "status": "error",
+                "message": "数据库连接失败"
+            }), 503
+
+        with mysql_client.get_connection() as conn:
+            with conn.cursor() as cursor:
+                # 不允许删除管理员账号
+                cursor.execute('SELECT role FROM system_user WHERE id = %s', (user_id,))
+                user = cursor.fetchone()
+                if user and user['role'] == 'admin':
+                    return jsonify({
+                        "status": "error",
+                        "message": "不能删除管理员账号"
+                    }), 403
+
+                cursor.execute('DELETE FROM system_user WHERE id = %s', (user_id,))
+                conn.commit()
+
+                return jsonify({
+                    "status": "success",
+                    "message": "用户删除成功"
+                })
+
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
         }), 500
 
 
