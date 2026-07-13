@@ -829,7 +829,7 @@ def user_login():
 
         from database import mysql_client
 
-        if not mysql_client or not mysql_client.pool:
+        if not mysql_client or not mysql_client.check_connection():
             return jsonify({
                 "status": "error",
                 "message": "数据库连接失败"
@@ -895,7 +895,7 @@ def get_users():
     try:
         from database import mysql_client
 
-        if not mysql_client or not mysql_client.pool:
+        if not mysql_client or not mysql_client.check_connection():
             return jsonify({
                 "status": "error",
                 "message": "数据库连接失败",
@@ -959,7 +959,7 @@ def create_user():
 
         from database import mysql_client
 
-        if not mysql_client or not mysql_client.pool:
+        if not mysql_client or not mysql_client.check_connection():
             return jsonify({
                 "status": "error",
                 "message": "数据库连接失败"
@@ -1006,7 +1006,7 @@ def update_user(user_id):
 
         from database import mysql_client
 
-        if not mysql_client or not mysql_client.pool:
+        if not mysql_client or not mysql_client.check_connection():
             return jsonify({
                 "status": "error",
                 "message": "数据库连接失败"
@@ -1061,7 +1061,7 @@ def delete_user(user_id):
     try:
         from database import mysql_client
 
-        if not mysql_client or not mysql_client.pool:
+        if not mysql_client or not mysql_client.check_connection():
             return jsonify({
                 "status": "error",
                 "message": "数据库连接失败"

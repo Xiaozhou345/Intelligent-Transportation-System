@@ -899,7 +899,6 @@ onUnmounted(() => {
         <div class="login-copy">
           <span class="login-eyebrow">访问控制</span>
           <h2>登录后进入视频监控台</h2>
-          <p>未登录状态不再直接展示实时视频画面。请选择身份进入系统，普通用户可查看数据和处置告警，管理员可注册上报设备、设置模型参数和管理白名单。</p>
         </div>
         <div class="login-card">
           <h3>用户登录</h3>

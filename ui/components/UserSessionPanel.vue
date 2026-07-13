@@ -25,7 +25,7 @@ const roleMap = {
 }
 
 const form = reactive({
-  username: 'admin',
+  username: '',
   password: ''
 })
 
