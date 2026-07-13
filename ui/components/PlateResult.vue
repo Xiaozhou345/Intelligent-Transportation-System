@@ -105,13 +105,16 @@ const decisionStatus = computed(() => {
 }
 
 .latest-card {
-  .el-card__header {
+  :deep(.el-card__header) {
     padding: 12px 16px;
     font-size: 16px;
     font-weight: 600;
+    color: #e0f2fe;
+    background: rgba(15, 23, 42, 0.6);
+    border-bottom: 1px solid rgba(56, 189, 248, 0.22);
   }
 
-  .el-card__body {
+  :deep(.el-card__body) {
     padding: 16px;
   }
 }
@@ -156,13 +159,16 @@ const decisionStatus = computed(() => {
 }
 
 .records-card {
-  .el-card__header {
+  :deep(.el-card__header) {
     padding: 12px 16px;
     font-size: 16px;
     font-weight: 600;
+    color: #e0f2fe;
+    background: rgba(15, 23, 42, 0.6);
+    border-bottom: 1px solid rgba(56, 189, 248, 0.22);
   }
 
-  .el-card__body {
+  :deep(.el-card__body) {
     padding: 16px;
     padding-top: 12px;
   }
