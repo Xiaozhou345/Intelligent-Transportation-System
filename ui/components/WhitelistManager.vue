@@ -9,7 +9,6 @@ const whitelist = ref([])
 const showDialog = ref(false)
 const form = reactive({
   plate: '',
-  owner: '',
   role: ''
 })
 
@@ -19,7 +18,6 @@ const loadWhitelist = (data) => {
     whitelist.value = data.map(item => ({
       id: item.id,
       plate: item.plate_number,
-      owner: item.owner || '未知',
       role: item.vehicle_type || 'visitor',
       status: item.permission_status === 1 ? 'enabled' : 'disabled',
       remark: item.remark
@@ -48,19 +46,17 @@ onMounted(() => {
 
 const resetForm = () => {
   form.plate = ''
-  form.owner = ''
   form.role = ''
 }
 
 const handleAdd = () => {
-  if (!form.plate || !form.owner) {
-    ElMessage.warning('请填写车牌号和所属人')
+  if (!form.plate) {
+    ElMessage.warning('请填写车牌号')
     return
   }
 
   const record = {
     plate: form.plate,
-    owner: form.owner,
     role: form.role || 'visitor',
     status: 'enabled'
   }
@@ -91,9 +87,8 @@ const toggleStatus = (row) => {
     </div>
 
     <ElTable :data="whitelist" stripe size="small" max-height="260">
-      <ElTableColumn prop="plate" label="车牌号" width="110" />
-      <ElTableColumn prop="owner" label="所属人" />
-      <ElTableColumn prop="role" label="类型" width="90" />
+      <ElTableColumn prop="plate" label="车牌号" width="120" />
+      <ElTableColumn prop="role" label="类型" width="100" />
       <ElTableColumn label="状态" width="80" align="center">
         <template #default="{ row }">
           <ElTag :type="row.status === 'enabled' ? 'success' : 'info'" size="small">
@@ -117,9 +112,6 @@ const toggleStatus = (row) => {
       <ElForm :model="form" label-width="80px">
         <ElFormItem label="车牌号">
           <ElInput v-model="form.plate" placeholder="例如：京A12345" />
-        </ElFormItem>
-        <ElFormItem label="所属人">
-          <ElInput v-model="form.owner" placeholder="请输入所属人或部门" />
         </ElFormItem>
         <ElFormItem label="类型">
           <ElInput v-model="form.role" placeholder="faculty / service / visitor" />

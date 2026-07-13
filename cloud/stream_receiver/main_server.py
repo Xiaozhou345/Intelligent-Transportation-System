@@ -686,7 +686,7 @@ def get_whitelist():
         with mysql_client.get_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute('''
-                SELECT id, plate_number, owner, vehicle_type,
+                SELECT id, plate_number, vehicle_type,
                        permission_status, remark, created_at, updated_at
                 FROM vehicle_whitelist
                 ORDER BY created_at DESC

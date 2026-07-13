@@ -37,7 +37,6 @@ CREATE TABLE IF NOT EXISTS edge_device (
 CREATE TABLE IF NOT EXISTS vehicle_whitelist (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键',
   plate_number VARCHAR(32) NOT NULL COMMENT '车牌号',
-  owner VARCHAR(128) NULL COMMENT '车辆所属人',
   vehicle_type VARCHAR(64) NULL COMMENT '车辆类型',
   permission_status TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否允许通行：1允许，0禁止',
   remark TEXT NULL COMMENT '备注',
