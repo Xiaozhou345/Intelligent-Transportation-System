@@ -571,11 +571,13 @@ const handleSendCommand = (command) => {
 const routeEvent = (data) => {
   updateLatency(data.timestamp)
 
-  // 过滤掉系统级消息，不显示在事件流中
+  // 过滤掉系统级消息和技术细节消息，不显示在事件流中
   // - system_status: 系统状态会静默更新仪表盘
   // - connection_status: 连接状态是欢迎消息，无需显示
   // - devices_list: 设备列表更新，不是业务事件
-  const systemMessages = ['system_status', 'connection_status', 'devices_list']
+  // - video_frame: 视频帧推送，技术细节，噪声大
+  // - video_overlay: 画框快照，技术细节，噪声大
+  const systemMessages = ['system_status', 'connection_status', 'devices_list', 'video_frame', 'video_overlay']
   if (!systemMessages.includes(data.event_type)) {
     addEventRecord(data)
   }
