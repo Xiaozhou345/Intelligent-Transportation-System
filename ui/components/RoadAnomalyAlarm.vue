@@ -75,6 +75,7 @@ const getStatusType = (status) => {
 }
 
 const getModeText = (mode) => {
+  if (props.modeStatus.models_loading) return '模型加载中'
   if (mode === 'background_learning') return '背景学习中'
   if (mode === 'detecting') return '检测中'
   return '未标定'
@@ -105,6 +106,7 @@ const formatScore = (value) => {
 }
 
 const getModeType = (mode) => {
+  if (props.modeStatus.models_loading) return 'warning'
   if (mode === 'background_learning') return 'warning'
   if (mode === 'detecting') return 'success'
   return 'info'
@@ -199,18 +201,18 @@ watch(() => props.records.length, (newLen, oldLen) => {
     </div>
 
     <div class="calibration-actions">
-      <ElButton type="warning" size="small" :disabled="!canOperate" @click="startBackgroundLearning">
+      <ElButton type="warning" size="small" :disabled="!canOperate || modeStatus.models_loading" @click="startBackgroundLearning">
         初始化背景
       </ElButton>
       <ElButton
         type="danger"
         size="small"
-        :disabled="!canOperate || modeStatus.mode === 'detecting'"
+        :disabled="!canOperate || modeStatus.models_loading || modeStatus.mode === 'detecting'"
         @click="startDetection"
       >
         {{ modeStatus.mode === 'detecting' ? '检测中' : '开始检测' }}
       </ElButton>
-      <ElButton size="small" :disabled="!canOperate" @click="resetCalibration">
+      <ElButton size="small" :disabled="!canOperate || modeStatus.models_loading" @click="resetCalibration">
         重新标定
       </ElButton>
       <span v-if="modeStatus.background_frames !== undefined">
@@ -219,8 +221,17 @@ watch(() => props.records.length, (newLen, oldLen) => {
       <span v-if="modeStatus.skipped_frames">
         跳过 {{ modeStatus.skipped_frames }}
       </span>
+      <span v-if="modeStatus.models_loading">
+        后台加载中，完成后自动可用
+      </span>
+      <span v-else-if="modeStatus.models_ready && modeStatus.models_load_ms">
+        模型就绪 {{ (modeStatus.models_load_ms / 1000).toFixed(1) }}s
+      </span>
       <span v-if="modeStatus.mode === 'detecting'">
         分数 {{ formatScore(modeStatus.last_heat_score) }}/{{ formatScore(modeStatus.heat_threshold) }}
+      </span>
+      <span v-if="modeStatus.mode === 'detecting' && modeStatus.last_appearance_score !== undefined">
+        细节 {{ formatScore(modeStatus.last_appearance_score) }}/{{ formatScore(modeStatus.appearance_threshold) }}
       </span>
       <span v-if="modeStatus.mode === 'detecting' && modeStatus.last_candidate_count !== undefined">
         候选 {{ modeStatus.last_candidate_count }}

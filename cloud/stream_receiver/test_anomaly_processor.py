@@ -371,6 +371,78 @@ class DinoReferenceDetectorTest(unittest.TestCase):
         self.assertEqual("camera_change", processor.detector.last_detection_reason)
         self.assertEqual([], processor.get_current_results())
 
+    def test_high_resolution_appearance_finds_small_object(self):
+        def constant_features(_frame):
+            return np.ones((4, 12, 16), dtype=np.float32)
+
+        detector = DinoReferenceDetector(
+            feature_extractor=constant_features,
+            device="cpu",
+            heat_threshold=0.99,
+            pixel_threshold=0.99,
+            appearance_threshold=18,
+            static_frames_threshold=3,
+            min_area=150,
+            min_component_extent=0.05,
+            component_merge_kernel=5,
+            use_default_road_scope=False,
+        )
+        processor = RoadAnomalyProcessor(detector=detector)
+        for _ in range(4):
+            self.assertTrue(
+                processor.update_background(self.background, road_mask=self.road_mask)
+            )
+
+        frame = self.background.copy()
+        cv2.circle(frame, (150, 140), 14, (235, 235, 235), -1)
+        events = []
+        for _ in range(5):
+            events.extend(processor.process_frame(
+                device_id="mobile_001",
+                frame=frame,
+                road_mask=self.road_mask,
+                vehicle_bboxes=[],
+            ))
+
+        self.assertEqual(1, len(events))
+        self.assertEqual("warning", events[0]["status"])
+        self.assertGreater(detector.last_appearance_score, detector.appearance_threshold)
+
+    def test_appearance_compensates_global_brightness_change(self):
+        def constant_features(_frame):
+            return np.ones((4, 12, 16), dtype=np.float32)
+
+        detector = DinoReferenceDetector(
+            feature_extractor=constant_features,
+            device="cpu",
+            heat_threshold=0.99,
+            pixel_threshold=0.99,
+            appearance_threshold=18,
+            static_frames_threshold=3,
+            min_area=150,
+            min_component_extent=0.05,
+            component_merge_kernel=5,
+            use_default_road_scope=False,
+        )
+        processor = RoadAnomalyProcessor(detector=detector)
+        for _ in range(4):
+            self.assertTrue(
+                processor.update_background(self.background, road_mask=self.road_mask)
+            )
+        brighter = cv2.convertScaleAbs(self.background, alpha=1.0, beta=20)
+
+        events = []
+        for _ in range(6):
+            events.extend(processor.process_frame(
+                device_id="mobile_001",
+                frame=brighter,
+                road_mask=self.road_mask,
+                vehicle_bboxes=[],
+            ))
+
+        self.assertEqual([], events)
+        self.assertEqual([], processor.get_current_results())
+
     def test_reference_calibration_masks_moderate_vehicle(self):
         detector = DinoReferenceDetector(
             feature_extractor=self.fake_features,

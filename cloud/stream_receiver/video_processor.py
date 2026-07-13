@@ -41,18 +41,17 @@ if PLATE_DETECTION_DIR not in sys.path:
 if BUSINESS_LOGIC_DIR not in sys.path:
     sys.path.append(BUSINESS_LOGIC_DIR)
 
-from detector import VehicleDetector
 from vehicle_tracker import VehicleTracker
 from illegal_parking import IllegalParkingMonitor
-from plate_detection.detector import PlateDetector
-from plate_recognition.plate_recognizer import (
-    PlateRecognizer,
-    crop_plate_image,
-    is_ocr_candidate_crop,
-    is_valid_plate_number,
-    normalize_plate_number,
-)
 from lane_detection import LaneDetector
+
+VehicleDetector = None
+PlateDetector = None
+PlateRecognizer = None
+crop_plate_image = None
+is_ocr_candidate_crop = None
+is_valid_plate_number = None
+normalize_plate_number = None
 
 # 添加父目录到Python路径以支持database模块导入
 CURRENT_DIR_VP = os.path.dirname(os.path.abspath(__file__))
@@ -107,7 +106,12 @@ class VideoProcessor:
         self.vehicle_detector = None
         self.plate_detector = None
         self.plate_recognizer = None
-        self.vehicle_conf = float(os.getenv("ITS_VEHICLE_CONF", "0.50"))
+        self.models_loading = False
+        self.models_ready = False
+        self.models_load_ms = 0.0
+        self.models_load_error = None
+        self.model_init_thread = None
+        self.vehicle_conf = float(os.getenv("ITS_VEHICLE_CONF", "0.60"))
         self.plate_conf = float(os.getenv("ITS_PLATE_CONF", "0.20"))
 
         # 性能优化参数
@@ -138,8 +142,67 @@ class VideoProcessor:
         self.runtime_defaults = self._load_runtime_defaults()
         self.runtime_state: Dict[str, dict] = {}
 
-        self._init_sandbox_ai()
+        if os.getenv("ITS_ASYNC_MODEL_INIT", "true").lower() == "true":
+            self.models_loading = True
+            self.model_init_thread = threading.Thread(
+                target=self._initialize_models_after_server_start,
+                name="its-model-loader",
+                daemon=True,
+            )
+            self.model_init_thread.start()
+            print("AI模型正在后台加载，HTTP/WebSocket服务可先启动")
+        else:
+            self._initialize_models()
         print("视频处理引擎初始化完成")
+
+    def _initialize_models_after_server_start(self):
+        delay = max(0.0, float(os.getenv("ITS_MODEL_INIT_DELAY", "5.0")))
+        if delay:
+            time.sleep(delay)
+        self._initialize_models()
+
+    @staticmethod
+    def _load_detection_model_classes():
+        global VehicleDetector, PlateDetector, PlateRecognizer
+        global crop_plate_image, is_ocr_candidate_crop
+        global is_valid_plate_number, normalize_plate_number
+        if VehicleDetector is not None:
+            return
+        from detector import VehicleDetector as VehicleDetectorClass
+        from plate_detection.detector import PlateDetector as PlateDetectorClass
+        from plate_recognition.plate_recognizer import (
+            PlateRecognizer as PlateRecognizerClass,
+            crop_plate_image as crop_plate_image_func,
+            is_ocr_candidate_crop as is_ocr_candidate_crop_func,
+            is_valid_plate_number as is_valid_plate_number_func,
+            normalize_plate_number as normalize_plate_number_func,
+        )
+        VehicleDetector = VehicleDetectorClass
+        PlateDetector = PlateDetectorClass
+        PlateRecognizer = PlateRecognizerClass
+        crop_plate_image = crop_plate_image_func
+        is_ocr_candidate_crop = is_ocr_candidate_crop_func
+        is_valid_plate_number = is_valid_plate_number_func
+        normalize_plate_number = normalize_plate_number_func
+
+    def _initialize_models(self):
+        started_at = time.perf_counter()
+        self.models_loading = True
+        self.models_load_error = None
+        try:
+            self._init_sandbox_ai()
+            self.models_ready = bool(self.anomaly_processor or self.vehicle_detector)
+        except Exception as exc:
+            self.models_load_error = str(exc)
+            self.models_ready = False
+            print(f"AI模型后台加载失败: {exc}")
+        finally:
+            self.models_loading = False
+            self.models_load_ms = (time.perf_counter() - started_at) * 1000
+            print(
+                f"AI模型加载结束: ready={self.models_ready}, "
+                f"elapsed={self.models_load_ms:.1f}ms"
+            )
 
     def _load_runtime_defaults(self):
         config_path = Path(CURRENT_DIR) / "illegal_parking_config.json"
@@ -197,10 +260,11 @@ class VideoProcessor:
                 print("沙盘道路分割模型未启用，将使用默认道路ROI")
 
             common_detector_kwargs = dict(
-                min_area=int(os.getenv("ITS_ANOMALY_MIN_AREA", "700")),
+                min_area=int(os.getenv("ITS_ANOMALY_MIN_AREA", "350")),
                 max_area=int(os.getenv("ITS_ANOMALY_MAX_AREA", "0")) or None,
                 max_area_ratio=float(os.getenv("ITS_ANOMALY_MAX_AREA_RATIO", "0.08")),
-                static_frames_threshold=int(os.getenv("ITS_ANOMALY_STATIC_FRAMES", "6")),
+                static_frames_threshold=int(os.getenv("ITS_ANOMALY_STATIC_FRAMES", "4")),
+                match_distance=float(os.getenv("ITS_ANOMALY_MATCH_DISTANCE", "100")),
                 max_missed_frames=int(os.getenv("ITS_ANOMALY_MAX_MISSED", "4")),
                 vehicle_mask_padding=int(os.getenv("ITS_VEHICLE_MASK_PADDING", "16")),
                 vehicle_mask_padding_ratio=float(os.getenv("ITS_VEHICLE_MASK_PADDING_RATIO", "0.10")),
@@ -244,6 +308,10 @@ class VideoProcessor:
                         )),
                         min_thin_side=int(os.getenv("ITS_DINO_MIN_THIN_SIDE", "18")),
                         max_thin_aspect=float(os.getenv("ITS_DINO_MAX_THIN_ASPECT", "4.0")),
+                        appearance_threshold=float(os.getenv(
+                            "ITS_ANOMALY_APPEARANCE_THRESHOLD",
+                            "26.0",
+                        )),
                         filter_lane_markings=False,
                         **dino_detector_kwargs,
                     )
@@ -303,6 +371,7 @@ class VideoProcessor:
             return
 
         try:
+            self._load_detection_model_classes()
             sandbox_model_path = os.path.join(AI_MODELS_DIR, "vehicle_detection", "sandbox_vehicle_best.pt")
             default_model_path = os.path.join(AI_MODELS_DIR, "vehicle_detection", "yolo11s.pt")
             yolo_path = sandbox_model_path if os.path.exists(sandbox_model_path) else default_model_path
@@ -1523,13 +1592,21 @@ class VideoProcessor:
 
         # ============ 步骤8：构建video_overlay ============
         step_start = time.time()
+        overlay_vehicles = tracked_vehicles
+        if active_scene == 'road_anomaly':
+            overlay_vehicles = [
+                tracked
+                for tracked in tracked_vehicles
+                if tracked.get("confidence", 0) >= self.vehicle_mask_min_conf
+            ]
+
         overlay = self._build_video_overlay(
             device_id=device_id,
             timestamp=timestamp,
             frame=frame,
             state=state,
             active_scene=active_scene,
-            tracked_vehicles=tracked_vehicles,
+            tracked_vehicles=overlay_vehicles,
             parking_events=parking_events,
             parking_statuses=parking_statuses,
             anomaly_events=anomaly_overlay_events,
@@ -1844,6 +1921,8 @@ class VideoProcessor:
 
     def start_anomaly_background_learning(self, device_id=None, reset=True):
         if not self.anomaly_processor:
+            if self.models_loading:
+                return {"status": "error", "message": "AI模型仍在后台加载，请稍候"}
             return {"status": "error", "message": "道路异常检测器未启用"}
 
         if reset:
@@ -1863,6 +1942,8 @@ class VideoProcessor:
 
     def start_anomaly_detection(self, device_id=None):
         if not self.anomaly_processor:
+            if self.models_loading:
+                return {"status": "error", "message": "AI模型仍在后台加载，请稍候"}
             return {"status": "error", "message": "道路异常检测器未启用"}
 
         targets = self._target_states(device_id)
@@ -1894,6 +1975,8 @@ class VideoProcessor:
 
     def reset_anomaly_background(self, device_id=None):
         if not self.anomaly_processor:
+            if self.models_loading:
+                return {"status": "error", "message": "AI模型仍在后台加载，请稍候"}
             return {"status": "error", "message": "道路异常检测器未启用"}
 
         self.anomaly_processor.reset()
@@ -1908,7 +1991,13 @@ class VideoProcessor:
         return {"status": "success", "mode": "background_learning", "background_frames": 0, "skipped_frames": 0}
 
     def _anomaly_backend_status(self):
-        payload = {"backend": self.anomaly_backend}
+        payload = {
+            "backend": self.anomaly_backend,
+            "models_loading": self.models_loading,
+            "models_ready": self.models_ready,
+            "models_load_ms": round(self.models_load_ms, 1),
+            "models_load_error": self.models_load_error,
+        }
         if not self.anomaly_processor:
             return payload
         detector = self.anomaly_processor.detector
@@ -1925,6 +2014,9 @@ class VideoProcessor:
             "last_candidate_count",
             "last_warning_count",
             "last_vehicle_mask_ratio",
+            "appearance_threshold",
+            "last_appearance_score",
+            "last_appearance_foreground_ratio",
             "model_warmed_up",
             "model_warmup_ms",
         ):

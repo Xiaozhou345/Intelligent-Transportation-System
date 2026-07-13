@@ -35,6 +35,8 @@ class DinoReferenceDetector(AnomalyDetector):
         min_background_valid_ratio=0.10,
         min_thin_side=18,
         max_thin_aspect=4.0,
+        appearance_threshold=26.0,
+        appearance_blur=5,
         feature_extractor: Callable | None = None,
         model=None,
         device=None,
@@ -68,6 +70,10 @@ class DinoReferenceDetector(AnomalyDetector):
         )
         self.min_thin_side = max(0, int(min_thin_side))
         self.max_thin_aspect = max(1.0, float(max_thin_aspect))
+        self.appearance_threshold = max(1.0, float(appearance_threshold))
+        self.appearance_blur = max(1, int(appearance_blur))
+        if self.appearance_blur % 2 == 0:
+            self.appearance_blur += 1
 
         self.feature_extractor = feature_extractor
         self.device = torch.device(
@@ -76,6 +82,8 @@ class DinoReferenceDetector(AnomalyDetector):
         self.model = model
         self.reference_sum = None
         self.reference_count = None
+        self.appearance_reference_sum = None
+        self.appearance_reference_count = None
         self.normal_heat_scores = []
         self.normal_pixel_scores = []
         self.camera_change_streak = 0
@@ -89,6 +97,8 @@ class DinoReferenceDetector(AnomalyDetector):
         self.last_candidate_count = 0
         self.last_warning_count = 0
         self.last_vehicle_mask_ratio = 0.0
+        self.last_appearance_score = 0.0
+        self.last_appearance_foreground_ratio = 0.0
         self.model_warmed_up = self.feature_extractor is not None
         self.model_warmup_ms = 0.0
 
@@ -238,6 +248,70 @@ class DinoReferenceDetector(AnomalyDetector):
         values = distance[validity > 0.5]
         return values.detach().float().cpu().numpy()
 
+    def _prepare_appearance(self, frame):
+        blurred = cv2.GaussianBlur(
+            frame,
+            (self.appearance_blur, self.appearance_blur),
+            0,
+        )
+        return cv2.cvtColor(blurred, cv2.COLOR_BGR2LAB).astype(np.float32)
+
+    def _update_appearance_reference(self, frame, road_scope, vehicle_mask):
+        appearance = self._prepare_appearance(frame)
+        valid = cv2.bitwise_and(road_scope, cv2.bitwise_not(vehicle_mask)) > 0
+        if not np.any(valid):
+            return
+        if (
+            self.appearance_reference_sum is None
+            or self.appearance_reference_sum.shape[:2] != frame.shape[:2]
+        ):
+            self.appearance_reference_sum = np.zeros_like(appearance, dtype=np.float32)
+            self.appearance_reference_count = np.zeros(frame.shape[:2], dtype=np.float32)
+        self.appearance_reference_sum[valid] += appearance[valid]
+        self.appearance_reference_count[valid] += 1.0
+
+    def _appearance_foreground(self, frame, active_scope):
+        empty = np.zeros(frame.shape[:2], dtype=np.uint8)
+        self.last_appearance_score = 0.0
+        self.last_appearance_foreground_ratio = 0.0
+        if (
+            self.appearance_reference_sum is None
+            or self.appearance_reference_count is None
+            or self.appearance_reference_sum.shape[:2] != frame.shape[:2]
+        ):
+            return empty
+
+        valid = (active_scope > 0) & (self.appearance_reference_count > 0)
+        if not np.any(valid):
+            return empty
+
+        reference = self.appearance_reference_sum / np.maximum(
+            self.appearance_reference_count[:, :, None],
+            1.0,
+        )
+        delta = self._prepare_appearance(frame) - reference
+
+        sampled_delta = delta[::8, ::8]
+        sampled_valid = valid[::8, ::8]
+        if np.any(sampled_valid):
+            global_shift = np.median(sampled_delta[sampled_valid], axis=0)
+            delta -= global_shift
+
+        distance = np.linalg.norm(delta, axis=2)
+        active_values = distance[valid]
+        self.last_appearance_score = float(np.quantile(active_values, 0.995))
+
+        foreground = np.zeros(frame.shape[:2], dtype=np.uint8)
+        foreground[(distance >= self.appearance_threshold) & valid] = 255
+        foreground = self._cleanup_mask(foreground)
+        foreground = self._merge_component_fragments(foreground)
+        foreground = self._remove_thin_artifacts(foreground)
+        active_pixels = max(1, int(np.count_nonzero(valid)))
+        self.last_appearance_foreground_ratio = (
+            cv2.countNonZero(foreground) / float(active_pixels)
+        )
+        return foreground
+
     def _distance_scores(self, values):
         if values.size == 0:
             return 0.0, 0.0
@@ -303,6 +377,8 @@ class DinoReferenceDetector(AnomalyDetector):
         ):
             self.last_background_skip_reason = "insufficient_visible_road"
             return False
+
+        self._update_appearance_reference(frame, road_scope, vehicle_mask)
 
         reference = self._reference_features()
         if reference is not None:
@@ -388,11 +464,21 @@ class DinoReferenceDetector(AnomalyDetector):
             return self._age_unmatched_tracks(set())
 
         self.camera_change_streak = 0
-        if self.last_heat_score < self.heat_threshold:
+        appearance_foreground = self._appearance_foreground(frame, active_scope)
+        appearance_pixels = cv2.countNonZero(appearance_foreground)
+        if (
+            self.last_heat_score < self.heat_threshold
+            and appearance_pixels < self.min_area
+        ):
             self.last_detection_reason = "below_heat_threshold"
             self.last_candidate_count = 0
             self.last_warning_count = 0
             return self._age_unmatched_tracks(set())
+
+        foreground = cv2.bitwise_or(foreground, appearance_foreground)
+        foreground = self._cleanup_mask(foreground)
+        foreground = self._merge_component_fragments(foreground)
+        foreground = self._remove_thin_artifacts(foreground)
 
         noisy_frame = self._foreground_too_large(foreground, active_scope)
         results = self._track_components(
@@ -431,6 +517,8 @@ class DinoReferenceDetector(AnomalyDetector):
         super().reset()
         self.reference_sum = None
         self.reference_count = None
+        self.appearance_reference_sum = None
+        self.appearance_reference_count = None
         self.normal_heat_scores = []
         self.normal_pixel_scores = []
         self.heat_threshold = self.base_heat_threshold
@@ -446,3 +534,5 @@ class DinoReferenceDetector(AnomalyDetector):
         self.last_candidate_count = 0
         self.last_warning_count = 0
         self.last_vehicle_mask_ratio = 0.0
+        self.last_appearance_score = 0.0
+        self.last_appearance_foreground_ratio = 0.0
