@@ -1,6 +1,6 @@
 <script setup>
 import { ref, reactive } from 'vue'
-import { ElInputNumber, ElButton, ElDialog, ElMessage, ElTabs, ElTabPane, ElSwitch } from 'element-plus'
+import { ElInputNumber, ElButton, ElDialog, ElMessage, ElTabs, ElTabPane } from 'element-plus'
 
 const emit = defineEmits(['send-command'])
 
@@ -11,19 +11,13 @@ const defaultConfig = {
   detection: {
     vehicleConf: 0.5,
     plateConf: 0.2,
-    iouThresh: 0.45,
-    useCuda: true,
-    useFp16: true,
-    vehicleImgsz: 960,
-    plateImgsz: 640,
-    frameSkip: 1
+    iouThresh: 0.45
   },
   tracking: {
     trackThresh: 0.5,
     matchThresh: 0.8,
     maxTimeLost: 30,
-    parkingThreshold: 30,
-    kalmanNoise: 0.05
+    parkingThreshold: 30
   },
   business: {
     smoothMax: 3,
@@ -59,10 +53,10 @@ const handleResetConfig = (tabKey) => {
       <span class="gear-icon">⚙️</span>
     </button>
   </div>
-  
-  <ElDialog 
+
+  <ElDialog
     :model-value="showDialog"
-    title="系统配置" 
+    title="系统配置"
     width="620px"
     append-to-body
     class="config-dialog"
@@ -91,22 +85,6 @@ const handleResetConfig = (tabKey) => {
                   <span class="slider-value">{{ config.detection.iouThresh.toFixed(2) }}</span>
                 </div>
               </div>
-              <div class="form-item">
-                <span class="form-label">输入分辨率(车辆)</span>
-                <div class="form-content">
-                  <ElInputNumber v-model="config.detection.vehicleImgsz" :min="416" :max="1280" :step="32" style="width: 150px" />
-                </div>
-              </div>
-              <div class="form-item">
-                <span class="form-label">CUDA加速</span>
-                <div class="form-content">
-                  <ElSwitch v-model="config.detection.useCuda" />
-                </div>
-                <span class="form-label">FP16半精度</span>
-                <div class="form-content">
-                  <ElSwitch v-model="config.detection.useFp16" />
-                </div>
-              </div>
             </div>
 
             <div class="section-title">
@@ -118,19 +96,6 @@ const handleResetConfig = (tabKey) => {
                 <div class="form-content">
                   <input type="range" v-model.number="config.detection.plateConf" min="0.05" max="0.5" step="0.05" class="config-slider" />
                   <span class="slider-value">{{ config.detection.plateConf.toFixed(2) }}</span>
-                </div>
-              </div>
-              <div class="form-item">
-                <span class="form-label">输入分辨率(车牌)</span>
-                <div class="form-content">
-                  <ElInputNumber v-model="config.detection.plateImgsz" :min="416" :max="960" :step="32" style="width: 150px" />
-                </div>
-              </div>
-              <div class="form-item">
-                <span class="form-label">跳帧间隔</span>
-                <div class="form-content">
-                  <ElInputNumber v-model="config.detection.frameSkip" :min="1" :max="10" style="width: 150px" />
-                  <span class="input-hint">每N帧推理一次</span>
                 </div>
               </div>
             </div>
@@ -166,13 +131,6 @@ const handleResetConfig = (tabKey) => {
                 <span class="form-label">目标丢失最大存活帧数</span>
                 <div class="form-content">
                   <ElInputNumber v-model="config.tracking.maxTimeLost" :min="10" :max="100" style="width: 150px" />
-                </div>
-              </div>
-              <div class="form-item">
-                <span class="form-label">卡尔曼滤波噪声系数</span>
-                <div class="form-content">
-                  <input type="range" v-model.number="config.tracking.kalmanNoise" min="0.01" max="0.2" step="0.01" class="config-slider" />
-                  <span class="slider-value">{{ config.tracking.kalmanNoise.toFixed(2) }}</span>
                 </div>
               </div>
             </div>

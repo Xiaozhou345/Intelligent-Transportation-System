@@ -1123,6 +1123,27 @@ def handle_client_command(data):
         emit('analysis_status', {'status': 'stopped'})
         return
 
+    if command == 'update_config':
+        config_type = data.get('config_type')
+        config_data = data.get('data', {})
+
+        try:
+            result = video_processor.update_config(config_type, config_data, device_id=device_id)
+            emit('config_updated', {
+                'status': 'success',
+                'config_type': config_type,
+                'message': result.get('message', '配置更新成功')
+            })
+            print(f"✅ 配置更新成功: {config_type} = {config_data}")
+        except Exception as e:
+            emit('config_updated', {
+                'status': 'error',
+                'config_type': config_type,
+                'message': str(e)
+            })
+            print(f"❌ 配置更新失败: {e}")
+        return
+
     emit('command_ack', {'status': 'ignored', 'payload': data})
 
 

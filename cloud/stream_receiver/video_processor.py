@@ -2308,6 +2308,95 @@ class VideoProcessor:
             self.vehicle_detector.conf_threshold = confidence
         print(f"已更新车辆检测置信度阈值: {confidence}")
 
+    def update_config(self, config_type, config_data, device_id=None):
+        """
+        统一配置更新接口
+
+        Args:
+            config_type: 配置类型 ('detection', 'tracking', 'business')
+            config_data: 配置数据字典
+            device_id: 可选的设备ID
+
+        Returns:
+            包含更新结果的字典
+        """
+        if config_type == 'detection':
+            # AI推理参数
+            if 'vehicleConf' in config_data:
+                self.vehicle_conf = float(config_data['vehicleConf'])
+                if self.vehicle_detector:
+                    self.vehicle_detector.conf_threshold = self.vehicle_conf
+                print(f"✅ 更新车辆检测置信度: {self.vehicle_conf}")
+
+            if 'plateConf' in config_data:
+                self.plate_conf = float(config_data['plateConf'])
+                if self.plate_detector:
+                    self.plate_detector.conf_threshold = self.plate_conf
+                print(f"✅ 更新车牌检测置信度: {self.plate_conf}")
+
+            if 'iouThresh' in config_data:
+                iou_thresh = float(config_data['iouThresh'])
+                if self.vehicle_detector:
+                    self.vehicle_detector.iou_threshold = iou_thresh
+                print(f"✅ 更新NMS阈值: {iou_thresh}")
+
+            return {'message': 'AI推理参数更新成功'}
+
+        elif config_type == 'tracking':
+            # 跟踪算法参数
+            targets = [self.runtime_state[device_id]] if device_id and device_id in self.runtime_state else self.runtime_state.values()
+
+            if 'trackThresh' in config_data or 'matchThresh' in config_data or 'maxTimeLost' in config_data:
+                for state in targets:
+                    tracker = state.get('vehicle_tracker')
+                    if tracker:
+                        if 'trackThresh' in config_data:
+                            tracker.track_thresh = float(config_data['trackThresh'])
+                            print(f"✅ 更新ByteTrack高置信度阈值: {tracker.track_thresh}")
+                        if 'matchThresh' in config_data:
+                            tracker.match_thresh = float(config_data['matchThresh'])
+                            print(f"✅ 更新ByteTrack匹配阈值: {tracker.match_thresh}")
+                        if 'maxTimeLost' in config_data:
+                            tracker.max_time_lost = int(config_data['maxTimeLost'])
+                            print(f"✅ 更新目标丢失最大存活帧数: {tracker.max_time_lost}")
+
+            if 'parkingThreshold' in config_data:
+                threshold_seconds = float(config_data['parkingThreshold'])
+                self.set_parking_threshold(threshold_seconds, device_id)
+
+            return {'message': '跟踪算法参数更新成功'}
+
+        elif config_type == 'business':
+            # 业务阈值参数
+            if 'smoothMax' in config_data or 'slowMax' in config_data or 'congestionMax' in config_data:
+                thresholds = self.runtime_defaults.setdefault('traffic_thresholds', {})
+                if 'smoothMax' in config_data:
+                    thresholds['smooth_max'] = int(config_data['smoothMax'])
+                    print(f"✅ 更新畅通阈值: {thresholds['smooth_max']}")
+                if 'slowMax' in config_data:
+                    thresholds['slow_max'] = int(config_data['slowMax'])
+                    print(f"✅ 更新缓行阈值: {thresholds['slow_max']}")
+                if 'congestionMax' in config_data:
+                    thresholds['congestion_max'] = int(config_data['congestionMax'])
+                    print(f"✅ 更新拥堵阈值: {thresholds['congestion_max']}")
+
+                # 更新所有设备的运行时配置
+                for state in self.runtime_state.values():
+                    state['traffic_thresholds'] = dict(thresholds)
+
+            if 'anomalyStaticFrames' in config_data:
+                frames = int(config_data['anomalyStaticFrames'])
+                # 更新异常检测处理器的参数
+                if self.anomaly_processor:
+                    # 这个参数会在下次创建异常检测器时生效
+                    self.runtime_defaults['anomaly_static_frames'] = frames
+                    print(f"✅ 更新异常触发连续帧: {frames}")
+
+            return {'message': '业务阈值参数更新成功'}
+
+        else:
+            raise ValueError(f"未知的配置类型: {config_type}")
+
     @staticmethod
     @staticmethod
     def _bottom_center(bbox):
