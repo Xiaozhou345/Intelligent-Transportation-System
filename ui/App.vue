@@ -570,7 +570,12 @@ const handleSendCommand = (command) => {
 
 const routeEvent = (data) => {
   updateLatency(data.timestamp)
-  addEventRecord(data)
+
+  // 过滤掉系统状态消息，不显示在事件流中
+  // 系统状态会静默更新仪表盘，但不需要在事件流中显示
+  if (data.event_type !== 'system_status') {
+    addEventRecord(data)
+  }
 
   if (data.event_type === 'video_frame') {
     handleVideoFrame(data)
