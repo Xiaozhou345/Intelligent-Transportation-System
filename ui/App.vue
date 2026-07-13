@@ -366,8 +366,9 @@ const buildOverlayBoxes = (overlay) => {
     ...normalize(data.vehicles, '#ef4444', 'vehicle'),
     ...normalize(data.plates, '#f59e0b', 'plate'),
     ...parkingStatuses,
-    ...normalize(parkingAlerts, '#b91c1c', 'illegal'),
-    ...normalize(data.road_anomalies, '#a855f7', 'anomaly')
+    ...normalize(parkingAlerts, '#b91c1c', 'illegal')
+    // 🔥 road_anomalies 紫色框已由后端在 video_frame 中绘制，前端不再重复画框
+    // ...normalize(data.road_anomalies, '#a855f7', 'anomaly')
   ]
 }
 
