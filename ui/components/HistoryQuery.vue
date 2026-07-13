@@ -155,15 +155,25 @@ const exportCsv = () => {
 
 const formatTime = (timestamp) => {
   if (!timestamp) return '-'
+
+  // 解析时间字符串
   const date = new Date(timestamp)
   if (Number.isNaN(date.getTime())) return timestamp
-  return date.toLocaleString('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit'
-  })
+
+  // 格式化为 MM/DD HH:mm:ss（本地时区）
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  const hour = String(date.getHours()).padStart(2, '0')
+  const minute = String(date.getMinutes()).padStart(2, '0')
+  const second = String(date.getSeconds()).padStart(2, '0')
+
+  // 如果是今年，不显示年份；如果是其他年份，显示年份
+  const currentYear = new Date().getFullYear()
+  if (year !== currentYear) {
+    return `${year}/${month}/${day} ${hour}:${minute}:${second}`
+  }
+  return `${month}/${day} ${hour}:${minute}:${second}`
 }
 
 const formatDetail = (event) => {
