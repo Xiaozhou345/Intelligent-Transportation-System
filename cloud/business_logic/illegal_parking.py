@@ -89,7 +89,7 @@ class IllegalParkingMonitor:
             self._update_call_count = 0
         self._update_call_count += 1
         if self._update_call_count % 30 == 0:
-            print(f"🚨 illegal_parking.update() 第{self._update_call_count}次调用, 收到 {len(tracked_vehicles)} 辆跟踪车辆")
+            print(f"🚨 illegal_parking.update() 第{self._update_call_count}次调用, 收到 {len(tracked_vehicles)} 辆跟踪车辆, 配置了 {len(self.zones)} 个禁停区")
 
         for tracked in tracked_vehicles:
             track_id = tracked['track_id']

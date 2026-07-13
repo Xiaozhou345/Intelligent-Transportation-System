@@ -1425,7 +1425,16 @@ class VideoProcessor:
         if active_scene == 'illegal_parking':
             yolo_count = len(vehicles) if 'vehicles' in locals() else 0
             tracked_count = len(tracked_vehicles)
-            print(f"🚨 [Frame {state['processed_frames']}] 违停场景 - YOLO检测: {yolo_count}辆, ByteTrack跟踪: {tracked_count}辆")
+            zones_count = len(state.get("no_parking_zones", []))
+            print(f"🚨 [Frame {state['processed_frames']}] 违停场景 - YOLO检测: {yolo_count}辆, ByteTrack跟踪: {tracked_count}辆, 禁停区: {zones_count}个")
+
+            # 输出跟踪车辆的详细信息
+            if tracked_count > 0:
+                for tv in tracked_vehicles[:3]:  # 只输出前3辆
+                    bbox = tv.get('bbox', [])
+                    if len(bbox) == 4:
+                        bottom_center = (int((bbox[0]+bbox[2])/2), int(bbox[3]))
+                        print(f"   车辆 track_id={tv.get('track_id')} bbox={bbox} 底部中心={bottom_center}")
 
         parking_events = state["parking_monitor"].update(device_id, tracked_vehicles, timestamp)
         parking_statuses = state["parking_monitor"].get_active_statuses(timestamp)
@@ -1435,13 +1444,14 @@ class VideoProcessor:
             active_tracks = len([s for s in parking_statuses if s.get('status') in ['monitoring', 'warning']])
             print(f"🚨 违停监控状态: {active_tracks} 辆车在禁停区, 共 {len(tracked_vehicles)} 辆车被跟踪")
 
-        if active_scene == 'illegal_parking':
-            for event in parking_events:
-                self._send_result(event)
-                print(
-                    f"🚨🚨🚨 违停告警触发: track_id={event['data'].get('track_id')} "
-                    f"stay_time={event['data'].get('stay_time')}s zone={event['data'].get('zone_name')} bbox={event.get('bbox')}"
-                )
+        # 🔥 修复：违停告警始终推送，不受场景限制
+        # 因为违停状态是持续跟踪的，告警应该实时推送给前端
+        for event in parking_events:
+            self._send_result(event)
+            print(
+                f"🚨🚨🚨 违停告警触发: track_id={event['data'].get('track_id')} "
+                f"stay_time={event['data'].get('stay_time')}s zone={event['data'].get('zone_name')} bbox={event.get('bbox')}"
+            )
         perf_timings['illegal_parking'] = (time.time() - step_start) * 1000
 
         # ============ 步骤7：道路异常检测 ============
