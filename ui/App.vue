@@ -611,8 +611,8 @@ const loadHistoryData = async () => {
   try {
     console.log('🔄 开始加载历史数据...')
 
-    // 1. 加载历史识别事件（最近50条）
-    const eventsRes = await fetch(`${CLOUD_SERVER_URL}/api/history/events?limit=50`)
+    // 1. 加载历史识别事件（最近10条）
+    const eventsRes = await fetch(`${CLOUD_SERVER_URL}/api/history/events?limit=10`)
     if (eventsRes.ok) {
       const eventsData = await eventsRes.json()
       if (eventsData.status === 'success' && eventsData.data.length > 0) {

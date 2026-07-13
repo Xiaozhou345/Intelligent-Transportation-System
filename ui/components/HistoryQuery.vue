@@ -45,7 +45,7 @@ const eventTypeText = {
 const loadEvents = async () => {
   loading.value = true
   try {
-    const params = new URLSearchParams({ limit: '50' })
+    const params = new URLSearchParams({ limit: '10' })
     if (filters.eventType) {
       params.append('event_type', filters.eventType)
     }
@@ -100,7 +100,7 @@ const filteredEvents = computed(() => {
       if (!keyword) return true
       return JSON.stringify(event).toLowerCase().includes(keyword)
     })
-    .slice(0, 50)
+    .slice(0, 10)
 })
 
 const resetFilters = () => {
@@ -237,7 +237,7 @@ const formatDetail = (event) => {
     <div class="section-header">
       <h2>历史查询</h2>
       <div class="header-actions">
-        <span>最近 50 条事件</span>
+        <span>最近 10 条事件</span>
         <ElButton size="small" @click="exportCsv">CSV</ElButton>
         <ElButton size="small" @click="exportJson">JSON</ElButton>
       </div>
