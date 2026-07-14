@@ -63,9 +63,6 @@ const handleAcknowledge = (row) => {
 
 const confirmAcknowledge = () => {
   if (!currentAlarm.value) return
-  const next = new Set(acknowledgedKeys.value)
-  next.add(getAlarmKey(currentAlarm.value))
-  acknowledgedKeys.value = next
   emit('dispose-alarm', {
     action: 'acknowledged',
     eventType: 'illegal_parking',

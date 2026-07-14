@@ -157,6 +157,7 @@ class WebSocketManager {
         transports: ['polling', 'websocket'],
         upgrade: true,
         reconnection: false,
+        withCredentials: true,
         timeout: 10000
       })
       this.status = 'connecting'

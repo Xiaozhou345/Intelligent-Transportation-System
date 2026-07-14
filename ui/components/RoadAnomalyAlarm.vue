@@ -152,9 +152,6 @@ const handleResolve = (row) => {
 
 const confirmResolve = () => {
   if (!currentAlarm.value) return
-  const next = new Set(resolvedKeys.value)
-  next.add(getAlarmKey(currentAlarm.value))
-  resolvedKeys.value = next
   emit('dispose-alarm', {
     action: 'resolved',
     eventType: 'road_anomaly',

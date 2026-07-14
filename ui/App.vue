@@ -21,6 +21,7 @@ const HistoryQuery = defineAsyncComponent(() => import('./components/HistoryQuer
 const WhitelistManager = defineAsyncComponent(() => import('./components/WhitelistManager.vue'))
 const UserSessionPanel = defineAsyncComponent(() => import('./components/UserSessionPanel.vue'))
 const RegisterPanel = defineAsyncComponent(() => import('./components/RegisterPanel.vue'))
+const ForgotPasswordDialog = defineAsyncComponent(() => import('./components/ForgotPasswordDialog.vue'))
 const AlarmWorkbench = defineAsyncComponent(() => import('./components/AlarmWorkbench.vue'))
 const DemoChecklist = defineAsyncComponent(() => import('./components/DemoChecklist.vue'))
 
@@ -62,6 +63,7 @@ const anomalyModeStatus = ref({ mode: 'detecting', background_frames: 0, enabled
 const currentUser = ref(null)
 const showLoginDialog = ref(false)
 const showRegisterDialog = ref(false)
+const showForgotPasswordDialog = ref(false)
 const alarmDispositionRecords = ref([])
 
 const dashboardStats = reactive({
@@ -184,6 +186,7 @@ const addEventRecord = (event) => {
 }
 
 const getAlarmKey = (alarm, eventType = alarm?.event_type) => {
+  if (alarm?.alarm_key || alarm?.data?.alarm_key) return alarm.alarm_key || alarm.data.alarm_key
   if (eventType === 'illegal_parking') {
     return `${eventType}-${alarm?.timestamp || ''}-${alarm?.data?.track_id || alarm?.track_id || ''}`
   }
@@ -193,9 +196,74 @@ const getAlarmKey = (alarm, eventType = alarm?.event_type) => {
   return `${eventType || 'alarm'}-${alarm?.timestamp || ''}-${JSON.stringify(alarm?.bbox || [])}`
 }
 
-const loadSavedUser = () => {
+const parseJsonValue = (value, fallback = null) => {
+  if (!value) return fallback
+  if (typeof value !== 'string') return value
+  try {
+    return JSON.parse(value)
+  } catch (error) {
+    return fallback
+  }
+}
+
+const mapAlarmDisposition = (record) => {
+  const detail = parseJsonValue(record.detail_json, {}) || {}
+  const eventType = record.alarm_type || detail.event_type
+  const alarmKey = record.alarm_key || detail.alarm_key || getAlarmKey(detail, eventType)
+  const alarm = {
+    ...detail,
+    id: record.id,
+    alarm_record_id: record.id,
+    alarm_key: alarmKey,
+    event_type: eventType,
+    status: record.status,
+    timestamp: detail.timestamp || record.created_at,
+    bbox: parseJsonValue(record.bbox, record.bbox)
+  }
+
+  return {
+    id: record.id,
+    alarmKey,
+    eventType,
+    action: record.status,
+    operator: record.disposed_by || '未知用户',
+    role: '',
+    handledAt: record.disposed_at,
+    note: record.disposition_note || '已处理',
+    alarm
+  }
+}
+
+const upsertDispositionRecord = (record) => {
+  const disposition = mapAlarmDisposition(record)
+  const existingIndex = alarmDispositionRecords.value.findIndex(item => item.id === disposition.id || item.alarmKey === disposition.alarmKey)
+  if (existingIndex >= 0) {
+    alarmDispositionRecords.value.splice(existingIndex, 1, disposition)
+  } else {
+    alarmDispositionRecords.value.unshift(disposition)
+  }
+  if (alarmDispositionRecords.value.length > 10) {
+    alarmDispositionRecords.value = alarmDispositionRecords.value.slice(0, 10)
+  }
+  return disposition
+}
+
+const loadSavedUser = async () => {
+  try {
+    const response = await fetch(`${CLOUD_SERVER_URL}/api/users/me`, {
+      credentials: 'include',
+      cache: 'no-store'
+    })
+    const payload = await response.json()
+    if (response.ok && payload.status === 'success') {
+      currentUser.value = payload.data
+      return true
+    }
+  } catch (error) {
+    console.warn('恢复登录态失败:', error.message)
+  }
   currentUser.value = null
-  window.localStorage.removeItem('its_current_user')
+  return false
 }
 
 const resetMonitoringState = () => {
@@ -243,6 +311,7 @@ const startAuthenticatedRuntime = async () => {
   stopAuthenticatedRuntime({ preserveEvents: true })
 
   await loadHistoryData()
+  await loadAlarmDispositions()
 
   fetchSystemStatus()
   fetchAnomalyStatus()
@@ -282,6 +351,7 @@ const handleLogin = async (credentials) => {
     const response = await fetch(`${CLOUD_SERVER_URL}/api/users/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
       body: JSON.stringify({
         username: credentials.username,
         password: credentials.password
@@ -310,8 +380,16 @@ const handleLogin = async (credentials) => {
   }
 }
 
-const handleLogout = () => {
+const handleLogout = async () => {
   const user = currentUser.value
+  try {
+    await fetch(`${CLOUD_SERVER_URL}/api/users/logout`, {
+      method: 'POST',
+      credentials: 'include'
+    })
+  } catch (error) {
+    console.warn('退出登录请求失败:', error.message)
+  }
   stopAuthenticatedRuntime()
   currentUser.value = null
   window.localStorage.removeItem('its_current_user')
@@ -330,8 +408,10 @@ const handleRegister = async (form) => {
     const response = await fetch(`${CLOUD_SERVER_URL}/api/users`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
       body: JSON.stringify({
         username: form.username,
+        email: form.email,
         password: form.password,
         role: form.role || 'user'
       })
@@ -349,42 +429,60 @@ const handleRegister = async (form) => {
   }
 }
 
-const applyAlarmStatus = (payload) => {
-  const alarmKey = getAlarmKey(payload.alarm, payload.eventType)
-  const patchRecord = (record) => getAlarmKey(record, payload.eventType) === alarmKey
-    ? { ...record, status: payload.action, handled_by: currentUser.value?.username || '未登录用户', handled_at: new Date().toISOString(), note: payload.note }
-    : record
+const handleAccountUpdated = (user) => {
+  currentUser.value = user
+}
 
-  if (payload.eventType === 'illegal_parking') {
-    illegalParkingRecords.value = illegalParkingRecords.value.map(patchRecord)
-  } else if (payload.eventType === 'road_anomaly') {
-    roadAnomalyRecords.value = roadAnomalyRecords.value.map(patchRecord)
+const applyAlarmStatus = async (payload) => {
+  const alarmId = payload.alarm?.alarm_record_id || payload.alarm?.data?.alarm_record_id || payload.alarm?.id
+  if (!alarmId) {
+    ElMessage.error('该告警未关联数据库记录，无法持久化处置')
+    return
   }
 
-  const disposition = {
-    id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    alarmKey,
-    eventType: payload.eventType,
-    action: payload.action,
-    operator: currentUser.value?.username || '未登录用户',
-    role: currentUser.value?.role || 'guest',
-    handledAt: new Date().toISOString(),
-    note: payload.note || '已处理',
-    alarm: payload.alarm
-  }
-  alarmDispositionRecords.value.unshift(disposition)
-  if (alarmDispositionRecords.value.length > 50) {
-    alarmDispositionRecords.value = alarmDispositionRecords.value.slice(0, 50)
-  }
+  try {
+    const response = await fetch(`${CLOUD_SERVER_URL}/api/alarms/${alarmId}/disposition`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        status: payload.action,
+        note: payload.note || ''
+      })
+    })
+    const result = await response.json()
+    if (!response.ok || result.status !== 'success') {
+      throw new Error(result.message || '处置保存失败')
+    }
 
-  addEventRecord({
-    event_type: 'alarm_disposition',
-    timestamp: disposition.handledAt,
-    device_id: 'frontend_console',
-    status: payload.action,
-    summary: `${disposition.operator} 处理 ${payload.eventType}`,
-    data: disposition
-  })
+    const alarmKey = result.data?.alarm_key || getAlarmKey(payload.alarm, payload.eventType)
+    const patchRecord = (record) => {
+      const recordId = record.alarm_record_id || record.data?.alarm_record_id || record.id
+      const sameAlarm = String(recordId || '') === String(alarmId) || getAlarmKey(record, payload.eventType) === alarmKey
+      return sameAlarm
+        ? { ...record, alarm_key: alarmKey, status: payload.action, handled_by: currentUser.value?.username || '未登录用户', handled_at: new Date().toISOString(), note: payload.note }
+        : record
+    }
+
+    if (payload.eventType === 'illegal_parking') {
+      illegalParkingRecords.value = illegalParkingRecords.value.map(patchRecord)
+    } else if (payload.eventType === 'road_anomaly') {
+      roadAnomalyRecords.value = roadAnomalyRecords.value.map(patchRecord)
+    }
+
+    const disposition = upsertDispositionRecord(result.data)
+    addEventRecord({
+      event_type: 'alarm_disposition',
+      timestamp: disposition.handledAt || new Date().toISOString(),
+      device_id: result.data?.device_id || 'frontend_console',
+      status: payload.action,
+      summary: `${disposition.operator} 处理 ${payload.eventType}`,
+      data: disposition
+    })
+    ElMessage.success('告警处置已写入数据库')
+  } catch (error) {
+    ElMessage.error(error.message || '处置保存失败')
+  }
 }
 
 const updateLatency = (timestamp) => {
@@ -829,9 +927,26 @@ const loadHistoryData = async () => {
   }
 }
 
+const loadAlarmDispositions = async () => {
+  try {
+    const response = await fetch(`${CLOUD_SERVER_URL}/api/alarms/dispositions?limit=10`, {
+      credentials: 'include'
+    })
+    const payload = await response.json()
+    if (!response.ok || payload.status !== 'success') {
+      throw new Error(payload.message || '告警处置台账读取失败')
+    }
+    alarmDispositionRecords.value = Array.isArray(payload.data)
+      ? payload.data.map(mapAlarmDisposition)
+      : []
+  } catch (error) {
+    console.warn('⚠️  加载告警处置台账失败:', error.message)
+  }
+}
+
 onMounted(async () => {
   if (isPublisherMode) return
-  loadSavedUser()
+  await loadSavedUser()
 
   clockTimer = setInterval(() => {
     currentTime.value = new Date()
@@ -883,13 +998,17 @@ onUnmounted(() => {
             v-if="currentUser"
             v-model:visible="showLoginDialog"
             :user="currentUser"
+            :server-url="CLOUD_SERVER_URL"
             @login="handleLogin"
             @logout="handleLogout"
             @register="showRegisterDialog = true"
+            @forgot-password="showForgotPasswordDialog = true"
+            @account-updated="handleAccountUpdated"
           />
           <ConfigPanel v-if="canConfigure" :server-url="CLOUD_SERVER_URL" @send-command="handleSendCommand" />
           <ElTag v-else type="info" size="large">只读模式</ElTag>
           <RegisterPanel v-model:visible="showRegisterDialog" @register="handleRegister" />
+          <ForgotPasswordDialog v-model:visible="showForgotPasswordDialog" :server-url="CLOUD_SERVER_URL" />
         </div>
       </div>
     </header>
@@ -902,7 +1021,7 @@ onUnmounted(() => {
         </div>
         <div class="login-card">
           <h3>用户登录</h3>
-          <UserSessionPanel embedded @login="handleLogin" />
+          <UserSessionPanel embedded @login="handleLogin" @forgot-password="showForgotPasswordDialog = true" />
           <div class="login-footer">
             <span>还没有账号？</span>
             <ElButton text @click="showRegisterDialog = true">立即注册</ElButton>

@@ -65,6 +65,7 @@ const handleAdd = async () => {
     const response = await fetch(`${props.serverUrl}/api/whitelist`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
       body: JSON.stringify({
         plate_number: plate,
         vehicle_type: form.role || 'visitor'
@@ -106,6 +107,7 @@ const toggleStatus = async (row) => {
     const response = await fetch(`${props.serverUrl}/api/whitelist/${encodeURIComponent(row.plate)}/status`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
       body: JSON.stringify({ enabled: nextStatus === 'enabled' })
     })
     const result = await response.json()

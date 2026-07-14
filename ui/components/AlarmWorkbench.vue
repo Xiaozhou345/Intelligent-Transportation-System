@@ -52,9 +52,15 @@ const downloadFile = (filename, content, mimeType) => {
 }
 
 const exportLedger = () => {
+  const exportData = {
+    exportedAt: new Date().toISOString(),
+    source: 'database_latest_10',
+    count: props.records.length,
+    records: props.records
+  }
   downloadFile(
     `its-alarm-dispositions-${Date.now()}.json`,
-    JSON.stringify(props.records, null, 2),
+    JSON.stringify(exportData, null, 2),
     'application/json;charset=utf-8'
   )
 }
@@ -65,11 +71,10 @@ const exportLedger = () => {
     <div class="section-header">
       <div>
         <h2>告警处置台账</h2>
-        <p>{{ records.length }} 条处置记录</p>
+        <p>{{ records.length }} 条处置记录（最新10条）</p>
       </div>
       <div class="header-actions">
-        <ElTag type="success" size="small">本地会话</ElTag>
-        <ElButton size="small" :disabled="!records.length" @click="exportLedger">导出</ElButton>
+        <ElButton size="small" :disabled="!records.length" @click="exportLedger">导出最新10条</ElButton>
       </div>
     </div>
 

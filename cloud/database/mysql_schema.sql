@@ -78,20 +78,27 @@ CREATE TABLE IF NOT EXISTS alarm_record (
   target_type VARCHAR(64) NULL COMMENT '目标类型：vehicle / object / plate 等',
   target_id VARCHAR(64) NULL COMMENT '目标 ID，例如 track_id 或 anomaly_id',
   plate_number VARCHAR(32) NULL COMMENT '涉及的车牌号（如有）',
+  alarm_key VARCHAR(191) NULL COMMENT '前后端统一告警键',
   description TEXT NULL COMMENT '告警描述',
   bbox JSON NULL COMMENT '告警目标位置',
   status ENUM('warning', 'acknowledged', 'resolved') NOT NULL DEFAULT 'warning' COMMENT '告警状态',
   detail_json JSON NULL COMMENT '完整告警数据 JSON',
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '告警时间',
   resolved_at DATETIME NULL COMMENT '解除时间',
+  disposed_by VARCHAR(64) NULL COMMENT '处置人用户名',
+  disposition_note TEXT NULL COMMENT '处置备注',
+  disposed_at DATETIME NULL COMMENT '处置时间',
   PRIMARY KEY (id),
   KEY idx_alarm_record_alarm_type (alarm_type),
   KEY idx_alarm_record_device_id (device_id),
   KEY idx_alarm_record_scene_id (scene_id),
   KEY idx_alarm_record_target_id (target_id),
+  KEY idx_alarm_record_alarm_key (alarm_key),
   KEY idx_alarm_record_plate_number (plate_number),
   KEY idx_alarm_record_status (status),
   KEY idx_alarm_record_created_at (created_at),
+  KEY idx_alarm_record_disposed_by (disposed_by),
+  KEY idx_alarm_record_disposed_at (disposed_at),
   CONSTRAINT fk_alarm_record_device_id
     FOREIGN KEY (device_id) REFERENCES edge_device(device_id)
     ON UPDATE CASCADE
@@ -111,6 +118,7 @@ CREATE TABLE IF NOT EXISTS system_config (
 CREATE TABLE IF NOT EXISTS system_user (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键',
   username VARCHAR(64) NOT NULL COMMENT '用户名',
+  email VARCHAR(128) NULL COMMENT '绑定邮箱',
   password_hash VARCHAR(255) NOT NULL COMMENT '密码哈希（bcrypt）',
   role ENUM('admin', 'user') NOT NULL DEFAULT 'user' COMMENT '角色：admin管理员，user普通用户',
   status TINYINT(1) NOT NULL DEFAULT 1 COMMENT '状态：1启用，0禁用',
@@ -119,9 +127,31 @@ CREATE TABLE IF NOT EXISTS system_user (
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (id),
   UNIQUE KEY uk_system_user_username (username),
+  UNIQUE KEY uk_system_user_email (email),
   KEY idx_system_user_role (role),
   KEY idx_system_user_status (status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='系统用户表';
+
+-- 密码找回验证码表
+CREATE TABLE IF NOT EXISTS password_reset_code (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键',
+  user_id BIGINT UNSIGNED NOT NULL COMMENT '用户ID',
+  email VARCHAR(128) NOT NULL COMMENT '接收验证码邮箱',
+  code_hash VARCHAR(255) NOT NULL COMMENT '验证码哈希',
+  expires_at DATETIME NOT NULL COMMENT '过期时间',
+  used_at DATETIME NULL COMMENT '使用时间',
+  attempt_count INT NOT NULL DEFAULT 0 COMMENT '校验失败次数',
+  request_ip VARCHAR(64) NULL COMMENT '请求来源IP',
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  PRIMARY KEY (id),
+  KEY idx_password_reset_user_id (user_id),
+  KEY idx_password_reset_email (email),
+  KEY idx_password_reset_expires_at (expires_at),
+  CONSTRAINT fk_password_reset_user_id
+    FOREIGN KEY (user_id) REFERENCES system_user(id)
+    ON UPDATE CASCADE
+    ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='密码找回验证码表';
 
 -- 插入默认管理员账号（密码：admin123）
 INSERT INTO system_user (username, password_hash, role, status)
