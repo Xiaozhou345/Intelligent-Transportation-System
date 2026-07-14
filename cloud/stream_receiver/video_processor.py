@@ -139,7 +139,7 @@ class VideoProcessor:
         # 车牌事件去重缓存：{device_id: {plate_number: last_sent_timestamp}}
         # 用于防止同一车牌短时间内重复推送到前端
         self.sent_plates: Dict[str, Dict[str, float]] = {}
-        self.plate_cooldown = float(os.getenv("ITS_PLATE_COOLDOWN", "30.0"))  # 默认30秒冷却时间
+        self.plate_cooldown = float(os.getenv("ITS_PLATE_COOLDOWN", "3.0"))  # 默认3秒冷却时间，避免下方车牌事件刷新过慢
 
         # 车辆检测事件去重缓存：{device_id: {track_id: last_sent_timestamp}}
         # 用于防止同一辆车短时间内重复推送到前端（与车牌去重逻辑一致）
