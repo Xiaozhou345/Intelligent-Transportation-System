@@ -226,7 +226,6 @@ def collect_system_status():
 # ==================== HTTP API 接口 ====================
 
 @app.route('/api/register_device', methods=['POST'])
-@require_roles('admin')
 def register_device():
     """设备注册接口"""
     try:
@@ -260,6 +259,10 @@ def register_device():
             return jsonify({"status": "error", "message": "fps必须为整数"}), 400
         if not 1 <= fps <= 120:
             return jsonify({"status": "error", "message": "fps必须在1到120之间"}), 400
+
+        _, auth_error = _require_roles('admin')
+        if auth_error:
+            return auth_error
 
         previous_device = device_manager.get_device(device_id)
         stream_changed = previous_device is not None and previous_device.stream_url != stream_url
