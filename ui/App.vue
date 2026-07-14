@@ -240,15 +240,28 @@ const upsertDispositionRecord = (record) => {
   } else {
     alarmDispositionRecords.value.unshift(disposition)
   }
-  if (alarmDispositionRecords.value.length > 50) {
-    alarmDispositionRecords.value = alarmDispositionRecords.value.slice(0, 50)
+  if (alarmDispositionRecords.value.length > 10) {
+    alarmDispositionRecords.value = alarmDispositionRecords.value.slice(0, 10)
   }
   return disposition
 }
 
-const loadSavedUser = () => {
+const loadSavedUser = async () => {
+  try {
+    const response = await fetch(`${CLOUD_SERVER_URL}/api/users/me`, {
+      credentials: 'include',
+      cache: 'no-store'
+    })
+    const payload = await response.json()
+    if (response.ok && payload.status === 'success') {
+      currentUser.value = payload.data
+      return true
+    }
+  } catch (error) {
+    console.warn('恢复登录态失败:', error.message)
+  }
   currentUser.value = null
-  window.localStorage.removeItem('its_current_user')
+  return false
 }
 
 const resetMonitoringState = () => {
@@ -909,7 +922,7 @@ const loadHistoryData = async () => {
 
 const loadAlarmDispositions = async () => {
   try {
-    const response = await fetch(`${CLOUD_SERVER_URL}/api/alarms/dispositions?limit=50`, {
+    const response = await fetch(`${CLOUD_SERVER_URL}/api/alarms/dispositions?limit=10`, {
       credentials: 'include'
     })
     const payload = await response.json()
@@ -926,7 +939,7 @@ const loadAlarmDispositions = async () => {
 
 onMounted(async () => {
   if (isPublisherMode) return
-  loadSavedUser()
+  await loadSavedUser()
 
   clockTimer = setInterval(() => {
     currentTime.value = new Date()

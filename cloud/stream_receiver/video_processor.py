@@ -362,9 +362,9 @@ class VideoProcessor:
                 max_current_results=int(os.getenv("ITS_ANOMALY_MAX_RESULTS", "3")),
             )
             if self.anomaly_backend == "dino_reference":
-                anomaly_model = f"DINOv2 Reference ({os.getenv('ITS_DINO_MODEL', 'dinov2_vits14_reg')})"
+                anomaly_model = "DINOv2参考特征异常检测"
             else:
-                anomaly_model = "MOG2 Background"
+                anomaly_model = "MOG2背景建模异常检测"
             self.model_status["road_anomaly"] = {"model": anomaly_model, "ready": True}
             print("✅ 沙盘道路异常检测已启用")
 
@@ -408,14 +408,14 @@ class VideoProcessor:
                 model_path=yolo_path,
                 conf_threshold=self.vehicle_conf,
             )
-            vehicle_model_name = os.path.basename(yolo_path)
+            vehicle_model_name = "YOLOv11 车辆检测"
             self.model_status["vehicle_detection"] = {"model": vehicle_model_name, "ready": True}
             self.model_status["traffic_density"] = {
-                "model": f"{vehicle_model_name} + LaneDetector + 阈值规则",
+                "model": "YOLOv11 车辆检测 + 车道统计规则",
                 "ready": self.lane_detector is not None,
             }
             self.model_status["illegal_parking"] = {
-                "model": f"{vehicle_model_name} + ByteTrack + 禁停规则",
+                "model": "YOLOv11 车辆检测 + ByteTrack违停判定",
                 "ready": True,
             }
             print("✅ 共享车辆检测已启用（服务于拥堵/违停/异常检测）")
@@ -427,7 +427,7 @@ class VideoProcessor:
                     conf_threshold=self.plate_conf,
                 )
                 self.model_status["plate_recognition"] = {
-                    "model": f"{os.path.basename(plate_model_path)} + OCR加载中",
+                    "model": "YOLOv11 车牌检测 + OCR加载中",
                     "ready": False,
                 }
                 print("✅ 共享车牌检测已启用（服务于视频叠加显示）")
@@ -457,7 +457,7 @@ class VideoProcessor:
                             lprnet_path = path
                             lprnet_load_success = True
                             self.model_status["plate_recognition"] = {
-                                "model": f"{os.path.basename(plate_model_path)} + {os.path.basename(path)}",
+                                "model": "YOLOv11 车牌检测 + LPRNet识别",
                                 "ready": True,
                             }
                             break
@@ -474,7 +474,7 @@ class VideoProcessor:
                     print("⚠️  车牌识别功能不可用，车牌框将不显示车牌号")
                     self.plate_recognizer = None
                     self.model_status["plate_recognition"] = {
-                        "model": f"{os.path.basename(plate_model_path)} + OCR未加载",
+                        "model": "YOLOv11 车牌检测（OCR未启用）",
                         "ready": True,
                     }
             else:

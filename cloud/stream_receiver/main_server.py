@@ -971,6 +971,15 @@ def user_logout():
     return jsonify({"status": "success", "message": "已退出登录"})
 
 
+@app.route('/api/users/me', methods=['GET'])
+def get_current_user():
+    """返回当前后端会话中的登录用户，用于前端刷新后恢复登录态。"""
+    user = _current_user()
+    if not user:
+        return jsonify({"status": "error", "message": "未登录"}), 401
+    return jsonify({"status": "success", "data": user})
+
+
 @app.route('/api/users', methods=['GET'])
 @require_roles('admin')
 def get_users():
