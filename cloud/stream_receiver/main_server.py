@@ -7,7 +7,8 @@ from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 from device_manager import DeviceManager
 from video_processor import VideoProcessor
-from datetime import datetime
+from datetime import datetime, timedelta
+from functools import wraps
 import os
 import platform
 import re
@@ -38,13 +39,14 @@ except ImportError:
 # 创建Flask应用
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv('ITS_SECRET_KEY') or secrets.token_hex(32)
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=int(os.getenv('ITS_SESSION_HOURS', '8')))
 app.config['MAX_CONTENT_LENGTH'] = int(os.getenv('ITS_MAX_UPLOAD_MB', '100')) * 1024 * 1024
 ALLOWED_ORIGINS = [
     origin.strip()
     for origin in os.getenv('ITS_ALLOWED_ORIGINS', '*').split(',')
     if origin.strip()
 ]
-CORS(app, resources={r"/*": {"origins": ALLOWED_ORIGINS}})
+CORS(app, resources={r"/*": {"origins": ALLOWED_ORIGINS}}, supports_credentials=True)
 
 # 创建SocketIO实例（使用threading模式 + simple-websocket后端）
 socketio = SocketIO(
@@ -92,16 +94,68 @@ def _request_token():
     return request.headers.get('X-API-Key', '').strip()
 
 
+def _current_user():
+    user = session.get('user')
+    if not isinstance(user, dict):
+        return None
+    if not user.get('id') or not user.get('username') or not user.get('role'):
+        return None
+    return user
+
+
+def _require_roles(*roles):
+    if API_TOKEN and hmac.compare_digest(_request_token(), API_TOKEN):
+        return {"id": 0, "username": "api_token", "role": "admin"}, None
+    user = _current_user()
+    if not user:
+        return None, (jsonify({"status": "error", "message": "请先登录"}), 401)
+    if roles and user.get('role') not in roles:
+        return None, (jsonify({"status": "error", "message": "权限不足"}), 403)
+    return user, None
+
+
+def require_roles(*roles):
+    def decorator(func):
+        @wraps(func)
+        def wrapped(*args, **kwargs):
+            _, error = _require_roles(*roles)
+            if error:
+                return error
+            return func(*args, **kwargs)
+        return wrapped
+    return decorator
+
+
+def _format_datetime_fields(record):
+    for key in ('created_at', 'updated_at', 'last_login', 'resolved_at', 'disposed_at'):
+        if record.get(key):
+            record[key] = record[key].strftime('%Y-%m-%d %H:%M:%S') if hasattr(record[key], 'strftime') else record[key]
+    return record
+
+
+def _public_mutating_endpoint():
+    return (
+        (request.method, request.path) in {
+            ('POST', '/api/users/login'),
+            ('POST', '/api/users'),
+        }
+    )
+
+
 @app.before_request
 def protect_mutating_api_routes():
-    """配置 ITS_API_TOKEN 后保护所有会修改状态的 API；未配置时保持演示兼容。"""
+    """配置 ITS_API_TOKEN 后保护状态修改接口；浏览器登录态可执行用户操作。"""
     if not API_TOKEN or not request.path.startswith('/api/'):
         return None
     if request.method not in {'POST', 'PUT', 'PATCH', 'DELETE'}:
         return None
-    if not hmac.compare_digest(_request_token(), API_TOKEN):
-        return jsonify({"status": "error", "message": "unauthorized"}), 401
-    return None
+    if _public_mutating_endpoint():
+        return None
+    if hmac.compare_digest(_request_token(), API_TOKEN):
+        return None
+    if _current_user():
+        return None
+    return jsonify({"status": "error", "message": "unauthorized"}), 401
 
 
 def _safe_percent(value):
@@ -172,6 +226,7 @@ def collect_system_status():
 # ==================== HTTP API 接口 ====================
 
 @app.route('/api/register_device', methods=['POST'])
+@require_roles('admin')
 def register_device():
     """设备注册接口"""
     try:
@@ -246,6 +301,7 @@ def register_device():
 
 
 @app.route('/api/unregister_device', methods=['POST'])
+@require_roles('admin')
 def unregister_device():
     """设备注销接口"""
     try:
@@ -612,6 +668,7 @@ def get_history_alarms():
                 "message": "数据库连接失败",
                 "data": []
             }), 503
+        mysql_client.ensure_alarm_disposition_schema()
 
         alarm_type = request.args.get('alarm_type')
         device_id = request.args.get('device_id')
@@ -640,8 +697,8 @@ def get_history_alarms():
 
                 sql = f'''
                 SELECT id, alarm_type, device_id, scene_id, target_type, target_id,
-                       plate_number, description, bbox, status, detail_json,
-                       created_at, resolved_at
+                       plate_number, alarm_key, description, bbox, status, detail_json,
+                       created_at, resolved_at, disposed_by, disposition_note, disposed_at
                 FROM alarm_record
                 WHERE {where_sql}
                 ORDER BY created_at DESC
@@ -709,6 +766,7 @@ def get_whitelist():
 
 
 @app.route('/api/whitelist', methods=['POST'])
+@require_roles('admin')
 def add_whitelist_entry():
     """新增或更新车牌白名单。"""
     try:
@@ -752,6 +810,7 @@ def add_whitelist_entry():
 
 
 @app.route('/api/whitelist/<plate_number>/status', methods=['PATCH'])
+@require_roles('admin')
 def update_whitelist_status(plate_number):
     """启用或停用车牌白名单。"""
     try:
@@ -871,6 +930,13 @@ def user_login():
                 ''', (user['id'],))
                 conn.commit()
 
+                session.permanent = True
+                session['user'] = {
+                    "id": user['id'],
+                    "username": user['username'],
+                    "role": user['role']
+                }
+
                 return jsonify({
                     "status": "success",
                     "message": "登录成功",
@@ -889,7 +955,15 @@ def user_login():
         }), 500
 
 
+@app.route('/api/users/logout', methods=['POST'])
+def user_logout():
+    """退出登录并清理后端会话。"""
+    session.pop('user', None)
+    return jsonify({"status": "success", "message": "已退出登录"})
+
+
 @app.route('/api/users', methods=['GET'])
+@require_roles('admin')
 def get_users():
     """获取用户列表（仅管理员）"""
     try:
@@ -953,6 +1027,14 @@ def create_user():
                 "status": "error",
                 "message": "角色必须是 admin 或 user"
             }), 400
+        current_user = _current_user()
+        if role == 'admin' and (not current_user or current_user.get('role') != 'admin'):
+            return jsonify({
+                "status": "error",
+                "message": "只有管理员可以创建管理员账号"
+            }), 403
+        if current_user and current_user.get('role') != 'admin':
+            role = 'user'
 
         # 密码哈希
         password_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
@@ -996,6 +1078,7 @@ def create_user():
 
 
 @app.route('/api/users/<int:user_id>', methods=['PUT'])
+@require_roles('admin')
 def update_user(user_id):
     """更新用户信息（仅管理员）"""
     try:
@@ -1056,6 +1139,7 @@ def update_user(user_id):
 
 
 @app.route('/api/users/<int:user_id>', methods=['DELETE'])
+@require_roles('admin')
 def delete_user(user_id):
     """删除用户（仅管理员）"""
     try:
@@ -1091,6 +1175,84 @@ def delete_user(user_id):
             "status": "error",
             "message": str(e)
         }), 500
+
+
+# ==================== 告警处置 API ====================
+
+@app.route('/api/alarms/<int:alarm_id>/disposition', methods=['PATCH'])
+def update_alarm_disposition(alarm_id):
+    """确认或解除告警，并把处置结果写回 alarm_record。"""
+    try:
+        user, error = _require_roles('admin', 'user')
+        if error:
+            return error
+
+        data = request.get_json(silent=True) or {}
+        status = str(data.get('status') or data.get('action') or '').strip()
+        note = str(data.get('note') or '').strip()
+
+        if status not in {'acknowledged', 'resolved'}:
+            return jsonify({"status": "error", "message": "告警状态必须是 acknowledged 或 resolved"}), 400
+        if not mysql_client.check_connection():
+            return jsonify({"status": "error", "message": "数据库连接失败"}), 503
+
+        success = mysql_client.update_alarm_disposition(
+            alarm_id=alarm_id,
+            status=status,
+            disposed_by=user['username'],
+            disposition_note=note,
+        )
+        if not success:
+            return jsonify({"status": "error", "message": "告警记录不存在或更新失败"}), 404
+
+        record = mysql_client.get_alarm_record(alarm_id)
+        if not record:
+            return jsonify({"status": "error", "message": "告警记录读取失败"}), 500
+        _format_datetime_fields(record)
+        return jsonify({"status": "success", "data": record})
+
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/api/alarms/dispositions', methods=['GET'])
+def get_alarm_dispositions():
+    """查询已持久化的告警处置台账。"""
+    try:
+        user, error = _require_roles('admin', 'user')
+        if error:
+            return error
+        if not mysql_client.check_connection():
+            return jsonify({"status": "error", "message": "数据库连接失败", "data": []}), 503
+
+        disposed_by = (request.args.get('disposed_by') or '').strip()
+        if user['role'] != 'admin':
+            disposed_by = user['username']
+        status = (request.args.get('status') or '').strip()
+        alarm_type = (request.args.get('alarm_type') or '').strip()
+        if status and status not in {'warning', 'acknowledged', 'resolved'}:
+            return jsonify({"status": "error", "message": "告警状态参数无效", "data": []}), 400
+
+        records, total = mysql_client.list_alarm_dispositions({
+            'disposed_by': disposed_by,
+            'status': status,
+            'alarm_type': alarm_type,
+            'limit': request.args.get('limit', 50),
+            'offset': request.args.get('offset', 0),
+        })
+        for record in records:
+            _format_datetime_fields(record)
+
+        return jsonify({
+            "status": "success",
+            "data": records,
+            "total": total,
+            "limit": min(int(request.args.get('limit', 50)), 500),
+            "offset": max(int(request.args.get('offset', 0)), 0),
+        })
+
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e), "data": []}), 500
 
 
 # ==================== WebSocket 事件处理 ====================
@@ -1207,6 +1369,14 @@ def handle_client_command(data):
         return
 
     if command == 'update_config':
+        user, error = _require_roles('admin')
+        if error:
+            emit('config_updated', {
+                'status': 'error',
+                'config_type': data.get('config_type'),
+                'message': '只有管理员可以修改系统配置'
+            })
+            return
         config_type = data.get('config_type')
         config_data = data.get('data', {})
 

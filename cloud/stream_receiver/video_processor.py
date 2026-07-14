@@ -2743,19 +2743,26 @@ class VideoProcessor:
     def _send_result(self, result):
         try:
             event_type = result['event_type']
-            self.socketio.emit('analysis_result', result)
-            print(f"推送结果: {event_type}")
-
             scene_id = None
             device = self.device_manager.get_device(result.get('device_id')) if result.get('device_id') else None
             if device:
                 scene_id = device.scene_id
 
+            if event_type in {'illegal_parking', 'road_anomaly'} and result.get('status') == 'warning':
+                alarm_id = mysql_client.insert_alarm_record(event_type, result.get('device_id'), result, scene_id=scene_id)
+                if alarm_id:
+                    result['alarm_record_id'] = alarm_id
+                    result['alarm_key'] = mysql_client.build_alarm_key(event_type, result)
+                    if isinstance(result.get('data'), dict):
+                        result['data']['alarm_record_id'] = alarm_id
+                        result['data']['alarm_key'] = result['alarm_key']
+
+            self.socketio.emit('analysis_result', result)
+            print(f"推送结果: {event_type}")
+
             # video_overlay / connection-like transient messages 不入库
             if event_type not in {'video_overlay', 'anomaly_calibration', 'video_segment_uploaded'}:
                 mysql_client.insert_recognition_event(event_type, result.get('device_id'), result, scene_id=scene_id)
-            if event_type in {'illegal_parking', 'road_anomaly'} and result.get('status') == 'warning':
-                mysql_client.insert_alarm_record(event_type, result.get('device_id'), result, scene_id=scene_id)
         except Exception as e:
             print(f"推送结果失败: {str(e)}")
 
