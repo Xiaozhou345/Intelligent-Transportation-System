@@ -21,6 +21,7 @@ const HistoryQuery = defineAsyncComponent(() => import('./components/HistoryQuer
 const WhitelistManager = defineAsyncComponent(() => import('./components/WhitelistManager.vue'))
 const UserSessionPanel = defineAsyncComponent(() => import('./components/UserSessionPanel.vue'))
 const RegisterPanel = defineAsyncComponent(() => import('./components/RegisterPanel.vue'))
+const ForgotPasswordDialog = defineAsyncComponent(() => import('./components/ForgotPasswordDialog.vue'))
 const AlarmWorkbench = defineAsyncComponent(() => import('./components/AlarmWorkbench.vue'))
 const DemoChecklist = defineAsyncComponent(() => import('./components/DemoChecklist.vue'))
 
@@ -62,6 +63,7 @@ const anomalyModeStatus = ref({ mode: 'detecting', background_frames: 0, enabled
 const currentUser = ref(null)
 const showLoginDialog = ref(false)
 const showRegisterDialog = ref(false)
+const showForgotPasswordDialog = ref(false)
 const alarmDispositionRecords = ref([])
 
 const dashboardStats = reactive({
@@ -409,6 +411,7 @@ const handleRegister = async (form) => {
       credentials: 'include',
       body: JSON.stringify({
         username: form.username,
+        email: form.email,
         password: form.password,
         role: form.role || 'user'
       })
@@ -424,6 +427,10 @@ const handleRegister = async (form) => {
   } catch (error) {
     ElMessage.error(error.message || '注册失败')
   }
+}
+
+const handleAccountUpdated = (user) => {
+  currentUser.value = user
 }
 
 const applyAlarmStatus = async (payload) => {
@@ -991,13 +998,17 @@ onUnmounted(() => {
             v-if="currentUser"
             v-model:visible="showLoginDialog"
             :user="currentUser"
+            :server-url="CLOUD_SERVER_URL"
             @login="handleLogin"
             @logout="handleLogout"
             @register="showRegisterDialog = true"
+            @forgot-password="showForgotPasswordDialog = true"
+            @account-updated="handleAccountUpdated"
           />
           <ConfigPanel v-if="canConfigure" :server-url="CLOUD_SERVER_URL" @send-command="handleSendCommand" />
           <ElTag v-else type="info" size="large">只读模式</ElTag>
           <RegisterPanel v-model:visible="showRegisterDialog" @register="handleRegister" />
+          <ForgotPasswordDialog v-model:visible="showForgotPasswordDialog" :server-url="CLOUD_SERVER_URL" />
         </div>
       </div>
     </header>
@@ -1010,7 +1021,7 @@ onUnmounted(() => {
         </div>
         <div class="login-card">
           <h3>用户登录</h3>
-          <UserSessionPanel embedded @login="handleLogin" />
+          <UserSessionPanel embedded @login="handleLogin" @forgot-password="showForgotPasswordDialog = true" />
           <div class="login-footer">
             <span>还没有账号？</span>
             <ElButton text @click="showRegisterDialog = true">立即注册</ElButton>

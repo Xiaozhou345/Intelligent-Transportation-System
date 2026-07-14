@@ -14,6 +14,9 @@ import platform
 import re
 import secrets
 import hmac
+import smtplib
+import ssl
+from email.message import EmailMessage
 from pathlib import Path
 import shutil
 import subprocess
@@ -66,6 +69,10 @@ DEVICE_ID_PATTERN = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$')
 ALLOWED_STREAM_SCHEMES = {'rtsp', 'rtmp', 'srt', 'http', 'https'}
 ALLOWED_VIDEO_EXTENSIONS = {'.mp4', '.mov', '.avi', '.mkv', '.flv', '.webm'}
 API_TOKEN = os.getenv('ITS_API_TOKEN', '').strip()
+EMAIL_PATTERN = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+RESET_CODE_TTL_MINUTES = int(os.getenv('ITS_RESET_CODE_MINUTES', '5'))
+RESET_CODE_MAX_ATTEMPTS = int(os.getenv('ITS_RESET_CODE_MAX_ATTEMPTS', '5'))
+RESET_CODE_RESEND_SECONDS = int(os.getenv('ITS_RESET_CODE_RESEND_SECONDS', '60'))
 
 
 def _valid_device_id(value):
@@ -133,11 +140,100 @@ def _format_datetime_fields(record):
     return record
 
 
+def _normalize_email(value):
+    return str(value or '').strip().lower()
+
+
+def _valid_email(value):
+    return EMAIL_PATTERN.fullmatch(_normalize_email(value)) is not None
+
+
+def _public_user(user):
+    return {
+        "id": user['id'],
+        "username": user['username'],
+        "role": user['role'],
+        "email": user.get('email') or ''
+    }
+
+
+def _config_value(key, default=''):
+    return os.getenv(key) or getattr(mysql_client, '_file_config', {}).get(key, default)
+
+
+def _smtp_settings():
+    return {
+        'host': _config_value('ITS_SMTP_HOST').strip(),
+        'port': int(_config_value('ITS_SMTP_PORT', '587')),
+        'user': _config_value('ITS_SMTP_USER').strip(),
+        'password': _config_value('ITS_SMTP_PASSWORD'),
+        'from_addr': _config_value('ITS_SMTP_FROM').strip() or _config_value('ITS_SMTP_USER').strip(),
+        'use_tls': _config_value('ITS_SMTP_USE_TLS', 'true').strip().lower() not in {'0', 'false', 'no'},
+    }
+
+
+def _send_reset_code_email(email, username, code):
+    settings = _smtp_settings()
+    if not settings['host'] or not settings['from_addr']:
+        return False, '邮件服务未配置'
+
+    message = EmailMessage()
+    message['Subject'] = '智慧交通系统密码重置验证码'
+    message['From'] = settings['from_addr']
+    message['To'] = email
+    message.set_content(
+        f"{username}，您好：\n\n"
+        f"您的密码重置验证码是：{code}\n"
+        f"验证码 {RESET_CODE_TTL_MINUTES} 分钟内有效，请勿转发给他人。\n\n"
+        "如果不是您本人操作，请忽略本邮件。"
+    )
+
+    try:
+        if settings['use_tls']:
+            context = ssl.create_default_context()
+            with smtplib.SMTP(settings['host'], settings['port'], timeout=10) as server:
+                server.starttls(context=context)
+                if settings['user'] and settings['password']:
+                    server.login(settings['user'], settings['password'])
+                server.send_message(message)
+        else:
+            with smtplib.SMTP_SSL(settings['host'], settings['port'], timeout=10) as server:
+                if settings['user'] and settings['password']:
+                    server.login(settings['user'], settings['password'])
+                server.send_message(message)
+        return True, None
+    except Exception as exc:
+        return False, f'验证码邮件发送失败: {exc}'
+
+
+def _hash_reset_code(code):
+    return bcrypt.hashpw(code.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+
+def _verify_reset_record(user_id, email, code):
+    record = mysql_client.get_latest_password_reset_code(user_id, email)
+    if not record:
+        return None, '验证码不存在或已失效'
+    if record.get('used_at'):
+        return None, '验证码已使用，请重新获取'
+    if record.get('expires_at') and datetime.now() > record['expires_at']:
+        return None, '验证码已过期，请重新获取'
+    if int(record.get('attempt_count') or 0) >= RESET_CODE_MAX_ATTEMPTS:
+        return None, '验证码错误次数过多，请重新获取'
+    if not bcrypt.checkpw(str(code or '').encode('utf-8'), record['code_hash'].encode('utf-8')):
+        mysql_client.increment_password_reset_attempt(record['id'])
+        return None, '验证码错误'
+    return record, None
+
+
 def _public_mutating_endpoint():
     return (
         (request.method, request.path) in {
             ('POST', '/api/users/login'),
             ('POST', '/api/users'),
+            ('POST', '/api/users/forgot-password/send-code'),
+            ('POST', '/api/users/forgot-password/verify-code'),
+            ('POST', '/api/users/forgot-password/reset'),
         }
     )
 
@@ -902,11 +998,16 @@ def user_login():
                 "status": "error",
                 "message": "数据库连接失败"
             }), 503
+        if not mysql_client.ensure_user_email_schema():
+            return jsonify({
+                "status": "error",
+                "message": "用户邮箱字段初始化失败"
+            }), 503
 
         with mysql_client.get_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute('''
-                SELECT id, username, password_hash, role, status, last_login
+                SELECT id, username, email, password_hash, role, status, last_login
                 FROM system_user
                 WHERE username = %s
                 ''', (username,))
@@ -940,20 +1041,12 @@ def user_login():
                 conn.commit()
 
                 session.permanent = True
-                session['user'] = {
-                    "id": user['id'],
-                    "username": user['username'],
-                    "role": user['role']
-                }
+                session['user'] = _public_user(user)
 
                 return jsonify({
                     "status": "success",
                     "message": "登录成功",
-                    "data": {
-                        "id": user['id'],
-                        "username": user['username'],
-                        "role": user['role']
-                    }
+                    "data": _public_user(user)
                 })
 
     except Exception as e:
@@ -980,6 +1073,185 @@ def get_current_user():
     return jsonify({"status": "success", "data": user})
 
 
+@app.route('/api/users/me', methods=['PATCH'])
+def update_current_user_profile():
+    """当前登录用户修改自己的用户名或密码。"""
+    try:
+        user, error = _require_roles('admin', 'user')
+        if error:
+            return error
+
+        data = request.get_json(silent=True) or {}
+        username = str(data.get('username') or '').strip()
+        email = _normalize_email(data.get('email'))
+        current_password = str(data.get('currentPassword') or '')
+        new_password = str(data.get('newPassword') or '')
+        confirm_password = str(data.get('confirmPassword') or '')
+
+        if not username:
+            return jsonify({"status": "error", "message": "用户名不能为空"}), 400
+        if not _valid_email(email):
+            return jsonify({"status": "error", "message": "邮箱格式不正确"}), 400
+        if not mysql_client.check_connection():
+            return jsonify({"status": "error", "message": "数据库连接失败"}), 503
+        if mysql_client.is_username_taken(username, exclude_user_id=user['id']):
+            return jsonify({"status": "error", "message": "用户名已存在"}), 409
+        if mysql_client.is_email_taken(email, exclude_user_id=user['id']):
+            return jsonify({"status": "error", "message": "邮箱已被其他账号绑定"}), 409
+
+        db_user = mysql_client.get_user_by_id(user['id'])
+        if not db_user or db_user.get('status') != 1:
+            return jsonify({"status": "error", "message": "当前账号不可用"}), 403
+
+        password_hash = None
+        if any([current_password, new_password, confirm_password]):
+            if not current_password or not new_password or not confirm_password:
+                return jsonify({"status": "error", "message": "修改密码时必须完整填写当前密码、新密码和确认密码"}), 400
+            if new_password != confirm_password:
+                return jsonify({"status": "error", "message": "两次输入的新密码不一致"}), 400
+            if not bcrypt.checkpw(current_password.encode('utf-8'), db_user['password_hash'].encode('utf-8')):
+                return jsonify({"status": "error", "message": "当前密码错误"}), 403
+            password_hash = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+        success = mysql_client.update_user_profile(user['id'], username=username, email=email, password_hash=password_hash)
+        if not success:
+            return jsonify({"status": "error", "message": "账号资料更新失败"}), 500
+
+        updated_user = mysql_client.get_user_by_id(user['id'])
+        if not updated_user:
+            return jsonify({"status": "error", "message": "账号资料读取失败"}), 500
+
+        session['user'] = _public_user(updated_user)
+
+        return jsonify({
+            "status": "success",
+            "message": "账号资料已更新",
+            "data": _public_user(updated_user)
+        })
+
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/api/users/forgot-password/send-code', methods=['POST'])
+def send_password_reset_code():
+    """发送邮箱验证码，用于未登录状态下找回密码。"""
+    try:
+        data = request.get_json(silent=True) or {}
+        username = str(data.get('username') or '').strip()
+        email = _normalize_email(data.get('email'))
+
+        if not username:
+            return jsonify({"status": "error", "message": "请输入用户名"}), 400
+        if not _valid_email(email):
+            return jsonify({"status": "error", "message": "邮箱格式不正确"}), 400
+        if not mysql_client.check_connection():
+            return jsonify({"status": "error", "message": "数据库连接失败"}), 503
+
+        user = mysql_client.get_user_by_username_email(username, email)
+        if not user or user.get('status') != 1:
+            return jsonify({
+                "status": "success",
+                "message": "如果账号信息匹配，验证码已发送至绑定邮箱"
+            })
+
+        latest = mysql_client.get_latest_password_reset_code(user['id'], email)
+        if latest and latest.get('created_at'):
+            elapsed = (datetime.now() - latest['created_at']).total_seconds()
+            if elapsed < RESET_CODE_RESEND_SECONDS:
+                return jsonify({
+                    "status": "error",
+                    "message": f"验证码发送过于频繁，请 {int(RESET_CODE_RESEND_SECONDS - elapsed) + 1} 秒后再试"
+                }), 429
+
+        code = f"{secrets.randbelow(1000000):06d}"
+        sent, error_message = _send_reset_code_email(email, user['username'], code)
+        if not sent:
+            return jsonify({"status": "error", "message": error_message or "验证码邮件发送失败"}), 503
+
+        expires_at = datetime.now() + timedelta(minutes=RESET_CODE_TTL_MINUTES)
+        created = mysql_client.create_password_reset_code(
+            user_id=user['id'],
+            email=email,
+            code_hash=_hash_reset_code(code),
+            expires_at=expires_at,
+            request_ip=request.headers.get('X-Forwarded-For', request.remote_addr),
+        )
+        if not created:
+            return jsonify({"status": "error", "message": "验证码保存失败"}), 500
+
+        return jsonify({
+            "status": "success",
+            "message": "如果账号信息匹配，验证码已发送至绑定邮箱"
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/api/users/forgot-password/verify-code', methods=['POST'])
+def verify_password_reset_code():
+    """校验邮箱验证码，不修改密码。"""
+    try:
+        data = request.get_json(silent=True) or {}
+        username = str(data.get('username') or '').strip()
+        email = _normalize_email(data.get('email'))
+        code = str(data.get('code') or '').strip()
+
+        if not username or not _valid_email(email) or not re.fullmatch(r'\d{6}', code):
+            return jsonify({"status": "error", "message": "请填写正确的用户名、邮箱和6位验证码"}), 400
+        if not mysql_client.check_connection():
+            return jsonify({"status": "error", "message": "数据库连接失败"}), 503
+
+        user = mysql_client.get_user_by_username_email(username, email)
+        if not user or user.get('status') != 1:
+            return jsonify({"status": "error", "message": "验证码不存在或已失效"}), 400
+
+        _, error_message = _verify_reset_record(user['id'], email, code)
+        if error_message:
+            return jsonify({"status": "error", "message": error_message}), 400
+        return jsonify({"status": "success", "message": "验证码校验通过"})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/api/users/forgot-password/reset', methods=['POST'])
+def reset_password_with_code():
+    """使用邮箱验证码重置密码。"""
+    try:
+        data = request.get_json(silent=True) or {}
+        username = str(data.get('username') or '').strip()
+        email = _normalize_email(data.get('email'))
+        code = str(data.get('code') or '').strip()
+        new_password = str(data.get('newPassword') or '')
+        confirm_password = str(data.get('confirmPassword') or '')
+
+        if not username or not _valid_email(email) or not re.fullmatch(r'\d{6}', code):
+            return jsonify({"status": "error", "message": "请填写正确的用户名、邮箱和6位验证码"}), 400
+        if not new_password:
+            return jsonify({"status": "error", "message": "请输入新密码"}), 400
+        if new_password != confirm_password:
+            return jsonify({"status": "error", "message": "两次输入的新密码不一致"}), 400
+        if not mysql_client.check_connection():
+            return jsonify({"status": "error", "message": "数据库连接失败"}), 503
+
+        user = mysql_client.get_user_by_username_email(username, email)
+        if not user or user.get('status') != 1:
+            return jsonify({"status": "error", "message": "验证码不存在或已失效"}), 400
+
+        record, error_message = _verify_reset_record(user['id'], email, code)
+        if error_message:
+            return jsonify({"status": "error", "message": error_message}), 400
+
+        password_hash = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        if not mysql_client.update_user_password(user['id'], password_hash):
+            return jsonify({"status": "error", "message": "密码重置失败"}), 500
+        mysql_client.mark_password_reset_code_used(record['id'])
+
+        return jsonify({"status": "success", "message": "密码已重置，请使用新密码登录"})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 @app.route('/api/users', methods=['GET'])
 @require_roles('admin')
 def get_users():
@@ -997,7 +1269,7 @@ def get_users():
         with mysql_client.get_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute('''
-                SELECT id, username, role, status, last_login, created_at, updated_at
+                SELECT id, username, email, role, status, last_login, created_at, updated_at
                 FROM system_user
                 ORDER BY created_at DESC
                 ''')
@@ -1031,6 +1303,7 @@ def create_user():
     try:
         data = request.get_json()
         username = data.get('username', '').strip()
+        email = _normalize_email(data.get('email'))
         password = data.get('password', '')
         role = data.get('role', 'user')
 
@@ -1038,6 +1311,11 @@ def create_user():
             return jsonify({
                 "status": "error",
                 "message": "用户名和密码不能为空"
+            }), 400
+        if not _valid_email(email):
+            return jsonify({
+                "status": "error",
+                "message": "请输入有效邮箱"
             }), 400
 
         if role not in ['admin', 'user']:
@@ -1064,6 +1342,11 @@ def create_user():
                 "status": "error",
                 "message": "数据库连接失败"
             }), 503
+        if not mysql_client.ensure_user_email_schema():
+            return jsonify({
+                "status": "error",
+                "message": "用户邮箱字段初始化失败"
+            }), 503
 
         with mysql_client.get_connection() as conn:
             with conn.cursor() as cursor:
@@ -1074,12 +1357,18 @@ def create_user():
                         "status": "error",
                         "message": "用户名已存在"
                     }), 409
+                cursor.execute('SELECT id FROM system_user WHERE email = %s', (email,))
+                if cursor.fetchone():
+                    return jsonify({
+                        "status": "error",
+                        "message": "邮箱已被注册"
+                    }), 409
 
                 # 插入新用户
                 cursor.execute('''
-                INSERT INTO system_user (username, password_hash, role, status)
-                VALUES (%s, %s, %s, 1)
-                ''', (username, password_hash, role))
+                INSERT INTO system_user (username, email, password_hash, role, status)
+                VALUES (%s, %s, %s, %s, 1)
+                ''', (username, email, password_hash, role))
                 conn.commit()
 
                 return jsonify({
@@ -1101,6 +1390,7 @@ def update_user(user_id):
     """更新用户信息（仅管理员）"""
     try:
         data = request.get_json()
+        email = _normalize_email(data.get('email')) if 'email' in data else None
         role = data.get('role')
         status = data.get('status')
         password = data.get('password')
@@ -1112,6 +1402,16 @@ def update_user(user_id):
                 "status": "error",
                 "message": "数据库连接失败"
             }), 503
+        if not mysql_client.ensure_user_email_schema():
+            return jsonify({
+                "status": "error",
+                "message": "用户邮箱字段初始化失败"
+            }), 503
+        if email is not None:
+            if not _valid_email(email):
+                return jsonify({"status": "error", "message": "邮箱格式不正确"}), 400
+            if mysql_client.is_email_taken(email, exclude_user_id=user_id):
+                return jsonify({"status": "error", "message": "邮箱已被其他账号绑定"}), 409
 
         with mysql_client.get_connection() as conn:
             with conn.cursor() as cursor:
@@ -1122,6 +1422,10 @@ def update_user(user_id):
                 if role and role in ['admin', 'user']:
                     updates.append('role = %s')
                     params.append(role)
+
+                if email is not None:
+                    updates.append('email = %s')
+                    params.append(email)
 
                 if status is not None:
                     updates.append('status = %s')

@@ -13,12 +13,14 @@ const emit = defineEmits(['register', 'update:visible'])
 
 const form = reactive({
   username: '',
+  email: '',
   password: '',
   confirmPassword: '',
   role: 'user'
 })
 
 const passwordError = ref('')
+const emailPattern = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
 
 const validatePassword = () => {
   if (form.password !== form.confirmPassword) {
@@ -34,6 +36,10 @@ const submitRegister = () => {
     ElMessage.warning('请输入用户名')
     return
   }
+  if (!emailPattern.test(form.email.trim().toLowerCase())) {
+    ElMessage.warning('请输入正确的邮箱')
+    return
+  }
   if (!form.password) {
     ElMessage.warning('请输入密码')
     return
@@ -44,11 +50,13 @@ const submitRegister = () => {
   
   emit('register', {
     username: form.username.trim(),
+    email: form.email.trim().toLowerCase(),
     password: form.password,
     role: 'user'
   })
-  
+
   form.username = ''
+  form.email = ''
   form.password = ''
   form.confirmPassword = ''
   form.role = 'user'
@@ -59,6 +67,7 @@ const submitRegister = () => {
 
 const closeDialog = () => {
   form.username = ''
+  form.email = ''
   form.password = ''
   form.confirmPassword = ''
   form.role = 'user'
@@ -82,6 +91,9 @@ const closeDialog = () => {
     <ElForm label-position="top">
       <ElFormItem label="用户名">
         <ElInput v-model="form.username" maxlength="24" placeholder="请输入用户名" />
+      </ElFormItem>
+      <ElFormItem label="邮箱">
+        <ElInput v-model="form.email" maxlength="128" placeholder="请输入用于找回密码的邮箱" />
       </ElFormItem>
       <ElFormItem label="密码">
         <ElInput v-model="form.password" type="password" maxlength="32" placeholder="请输入密码" />

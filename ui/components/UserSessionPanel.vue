@@ -1,6 +1,7 @@
 <script setup>
-import { reactive } from 'vue'
+import { reactive, ref } from 'vue'
 import { ElButton, ElDialog, ElForm, ElFormItem, ElInput, ElTag } from 'element-plus'
+import AccountSettingsDialog from './AccountSettingsDialog.vue'
 
 const props = defineProps({
   user: {
@@ -14,10 +15,14 @@ const props = defineProps({
   embedded: {
     type: Boolean,
     default: false
+  },
+  serverUrl: {
+    type: String,
+    default: ''
   }
 })
 
-const emit = defineEmits(['login', 'logout', 'register', 'update:visible'])
+const emit = defineEmits(['login', 'logout', 'register', 'forgot-password', 'account-updated', 'update:visible'])
 
 const roleMap = {
   admin: { label: '管理员', type: 'danger' },
@@ -28,6 +33,7 @@ const form = reactive({
   username: '',
   password: ''
 })
+const showAccountDialog = ref(false)
 
 const submitLogin = () => {
   if (!form.username.trim() || !form.password) {
@@ -42,6 +48,16 @@ const submitLogin = () => {
 const closeDialog = () => {
   emit('update:visible', false)
 }
+
+const openForgotPassword = () => {
+  closeDialog()
+  emit('forgot-password')
+}
+
+const handleAccountUpdated = (user) => {
+  showAccountDialog.value = false
+  emit('account-updated', user)
+}
 </script>
 
 <template>
@@ -49,21 +65,35 @@ const closeDialog = () => {
     <template v-if="embedded">
       <ElForm label-position="top" class="embedded-login-form">
         <ElFormItem label="用户名">
-          <ElInput v-model="form.username" maxlength="24" />
+          <ElInput v-model="form.username" maxlength="24" @keyup.enter="submitLogin" />
         </ElFormItem>
         <ElFormItem label="密码">
-          <ElInput v-model="form.password" type="password" maxlength="32" placeholder="请输入密码" />
+          <ElInput v-model="form.password" type="password" maxlength="32" placeholder="请输入密码" @keyup.enter="submitLogin" />
         </ElFormItem>
+        <div class="embedded-forgot-row">
+          <ElButton text @click="openForgotPassword">忘记密码？</ElButton>
+        </div>
         <ElButton type="primary" class="login-submit" @click="submitLogin">进入视频监控台</ElButton>
       </ElForm>
     </template>
 
     <template v-else>
     <template v-if="user">
-      <ElTag :type="roleMap[user.role]?.type || 'info'" size="small" style="height: 32px; line-height: 30px; padding: 0 12px;">
+      <ElTag
+        :type="roleMap[user.role]?.type || 'info'"
+        size="small"
+        style="height: 32px; line-height: 30px; padding: 0 12px; cursor: pointer;"
+        @click="showAccountDialog = true"
+      >
         {{ roleMap[user.role]?.label || user.role }}
       </ElTag>
       <ElButton size="small" plain style="height: 32px; padding: 0 15px; border-radius: 8px; line-height: 30px;" @click="emit('logout')">退出</ElButton>
+      <AccountSettingsDialog
+        v-model:visible="showAccountDialog"
+        :user="user"
+        :server-url="serverUrl"
+        @updated="handleAccountUpdated"
+      />
     </template>
     <ElButton v-else size="small" type="primary" @click="emit('update:visible', true)">登录</ElButton>
 
@@ -80,15 +110,18 @@ const closeDialog = () => {
     >
       <ElForm label-position="top">
         <ElFormItem label="用户名">
-          <ElInput v-model="form.username" maxlength="24" />
+          <ElInput v-model="form.username" maxlength="24" @keyup.enter="submitLogin" />
         </ElFormItem>
         <ElFormItem label="密码">
-          <ElInput v-model="form.password" type="password" maxlength="32" placeholder="请输入密码" />
+          <ElInput v-model="form.password" type="password" maxlength="32" placeholder="请输入密码" @keyup.enter="submitLogin" />
         </ElFormItem>
       </ElForm>
       <template #footer>
         <div class="login-dialog-footer">
-          <ElButton text @click="emit('register')">注册账号</ElButton>
+          <div class="login-dialog-links">
+            <ElButton text @click="emit('register')">注册账号</ElButton>
+            <ElButton text @click="openForgotPassword">忘记密码？</ElButton>
+          </div>
           <div class="login-dialog-actions">
             <ElButton @click="closeDialog">取消</ElButton>
             <ElButton type="primary" @click="submitLogin">进入系统</ElButton>
@@ -164,6 +197,17 @@ const closeDialog = () => {
   width: 100%;
 }
 
+.embedded-forgot-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: -4px;
+}
+
+.embedded-forgot-row .el-button--text {
+  color: #93c5fd;
+  font-size: 13px;
+}
+
 .login-submit {
   height: 42px;
   margin-top: 4px;
@@ -211,6 +255,11 @@ const closeDialog = () => {
 .login-dialog-actions {
   display: flex;
   gap: 8px;
+}
+
+.login-dialog-links {
+  display: flex;
+  gap: 4px;
 }
 
 .login-dialog-footer .el-button--text {

@@ -399,15 +399,308 @@ def list_alarm_dispositions(filters: Optional[Dict[str, Any]] = None):
             cursor.execute(f'SELECT COUNT(*) as total FROM alarm_record WHERE {where_sql}', params)
             total = cursor.fetchone()['total']
             cursor.execute(
-                f"""
+                f'''
                 SELECT id, alarm_type, device_id, scene_id, target_type, target_id,
                        plate_number, alarm_key, description, bbox, status, detail_json,
                        created_at, resolved_at, disposed_by, disposition_note, disposed_at
                 FROM alarm_record
                 WHERE {where_sql}
-                ORDER BY disposed_at DESC, created_at DESC
+                ORDER BY disposed_at DESC, id DESC
                 LIMIT %s OFFSET %s
-                """,
+                ''',
                 [*params, limit, offset],
             )
             return cursor.fetchall(), total
+
+
+def ensure_user_email_schema() -> bool:
+    """Backfill email support for older system_user tables."""
+    if not check_connection():
+        return False
+
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT COLUMN_NAME
+                    FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE TABLE_SCHEMA = %s AND TABLE_NAME = 'system_user'
+                    """,
+                    (DB_SETTINGS['database'],),
+                )
+                existing = {row['COLUMN_NAME'] for row in cursor.fetchall()}
+                if 'email' not in existing:
+                    cursor.execute(
+                        "ALTER TABLE system_user ADD COLUMN email VARCHAR(128) NULL COMMENT '绑定邮箱' AFTER username"
+                    )
+
+                cursor.execute(
+                    """
+                    SELECT INDEX_NAME
+                    FROM INFORMATION_SCHEMA.STATISTICS
+                    WHERE TABLE_SCHEMA = %s AND TABLE_NAME = 'system_user'
+                    """,
+                    (DB_SETTINGS['database'],),
+                )
+                existing_indexes = {row['INDEX_NAME'] for row in cursor.fetchall()}
+                if 'uk_system_user_email' not in existing_indexes:
+                    cursor.execute('CREATE UNIQUE INDEX uk_system_user_email ON system_user(email)')
+        return True
+    except Exception as exc:
+        global _db_available_cache, _db_error_cache
+        _db_available_cache = False
+        _db_error_cache = str(exc)
+        return False
+
+
+def ensure_password_reset_schema() -> bool:
+    """Create password reset code table when missing."""
+    if not ensure_user_email_schema():
+        return False
+
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS password_reset_code (
+                      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键',
+                      user_id BIGINT UNSIGNED NOT NULL COMMENT '用户ID',
+                      email VARCHAR(128) NOT NULL COMMENT '接收验证码邮箱',
+                      code_hash VARCHAR(255) NOT NULL COMMENT '验证码哈希',
+                      expires_at DATETIME NOT NULL COMMENT '过期时间',
+                      used_at DATETIME NULL COMMENT '使用时间',
+                      attempt_count INT NOT NULL DEFAULT 0 COMMENT '校验失败次数',
+                      request_ip VARCHAR(64) NULL COMMENT '请求来源IP',
+                      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                      PRIMARY KEY (id),
+                      KEY idx_password_reset_user_id (user_id),
+                      KEY idx_password_reset_email (email),
+                      KEY idx_password_reset_expires_at (expires_at),
+                      CONSTRAINT fk_password_reset_user_id
+                        FOREIGN KEY (user_id) REFERENCES system_user(id)
+                        ON UPDATE CASCADE
+                        ON DELETE CASCADE
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='密码找回验证码表'
+                    """
+                )
+        return True
+    except Exception as exc:
+        global _db_available_cache, _db_error_cache
+        _db_available_cache = False
+        _db_error_cache = str(exc)
+        return False
+
+
+def normalize_email(email: str) -> str:
+    return str(email or '').strip().lower()
+
+
+def get_user_by_id(user_id: int) -> Optional[Dict[str, Any]]:
+    if not ensure_user_email_schema():
+        return None
+
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                '''
+                SELECT id, username, email, password_hash, role, status, last_login, created_at, updated_at
+                FROM system_user
+                WHERE id = %s
+                LIMIT 1
+                ''',
+                (user_id,),
+            )
+            return cursor.fetchone()
+
+
+def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
+    if not ensure_user_email_schema():
+        return None
+
+    normalized = str(username or '').strip()
+    if not normalized:
+        return None
+
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                '''
+                SELECT id, username, email, password_hash, role, status, last_login, created_at, updated_at
+                FROM system_user
+                WHERE username = %s
+                LIMIT 1
+                ''',
+                (normalized,),
+            )
+            return cursor.fetchone()
+
+
+def get_user_by_username_email(username: str, email: str) -> Optional[Dict[str, Any]]:
+    if not ensure_user_email_schema():
+        return None
+
+    normalized_username = str(username or '').strip()
+    normalized_email = normalize_email(email)
+    if not normalized_username or not normalized_email:
+        return None
+
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                '''
+                SELECT id, username, email, password_hash, role, status, last_login, created_at, updated_at
+                FROM system_user
+                WHERE username = %s AND email = %s
+                LIMIT 1
+                ''',
+                (normalized_username, normalized_email),
+            )
+            return cursor.fetchone()
+
+
+def is_username_taken(username: str, exclude_user_id: Optional[int] = None) -> bool:
+    if not ensure_user_email_schema():
+        return False
+
+    normalized = str(username or '').strip()
+    if not normalized:
+        return False
+
+    sql = 'SELECT id FROM system_user WHERE username = %s'
+    params = [normalized]
+    if exclude_user_id is not None:
+        sql += ' AND id <> %s'
+        params.append(exclude_user_id)
+    sql += ' LIMIT 1'
+
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, params)
+            return cursor.fetchone() is not None
+
+
+def is_email_taken(email: str, exclude_user_id: Optional[int] = None) -> bool:
+    if not ensure_user_email_schema():
+        return False
+
+    normalized = normalize_email(email)
+    if not normalized:
+        return False
+
+    sql = 'SELECT id FROM system_user WHERE email = %s'
+    params = [normalized]
+    if exclude_user_id is not None:
+        sql += ' AND id <> %s'
+        params.append(exclude_user_id)
+    sql += ' LIMIT 1'
+
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, params)
+            return cursor.fetchone() is not None
+
+
+def update_user_profile(user_id: int, username: str, email: Optional[str] = None, password_hash: Optional[str] = None) -> bool:
+    if not ensure_user_email_schema():
+        return False
+
+    updates = ['username = %s', 'email = %s']
+    params = [str(username or '').strip(), normalize_email(email)]
+    if password_hash:
+        updates.append('password_hash = %s')
+        params.append(password_hash)
+    params.append(user_id)
+
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                f"UPDATE system_user SET {', '.join(updates)} WHERE id = %s",
+                params,
+            )
+            return cursor.rowcount >= 0
+
+
+def create_password_reset_code(user_id: int, email: str, code_hash: str, expires_at, request_ip: Optional[str] = None) -> bool:
+    if not ensure_password_reset_schema():
+        return False
+
+    normalized_email = normalize_email(email)
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                '''
+                UPDATE password_reset_code
+                SET used_at = NOW()
+                WHERE user_id = %s AND used_at IS NULL
+                ''',
+                (user_id,),
+            )
+            cursor.execute(
+                '''
+                INSERT INTO password_reset_code (user_id, email, code_hash, expires_at, request_ip)
+                VALUES (%s, %s, %s, %s, %s)
+                ''',
+                (user_id, normalized_email, code_hash, expires_at, request_ip),
+            )
+            return True
+
+
+def get_latest_password_reset_code(user_id: int, email: str) -> Optional[Dict[str, Any]]:
+    if not ensure_password_reset_schema():
+        return None
+
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                '''
+                SELECT id, user_id, email, code_hash, expires_at, used_at, attempt_count, created_at
+                FROM password_reset_code
+                WHERE user_id = %s AND email = %s AND used_at IS NULL
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+                ''',
+                (user_id, normalize_email(email)),
+            )
+            return cursor.fetchone()
+
+
+def increment_password_reset_attempt(reset_id: int) -> bool:
+    if not ensure_password_reset_schema():
+        return False
+
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                'UPDATE password_reset_code SET attempt_count = attempt_count + 1 WHERE id = %s',
+                (reset_id,),
+            )
+            return cursor.rowcount == 1
+
+
+def mark_password_reset_code_used(reset_id: int) -> bool:
+    if not ensure_password_reset_schema():
+        return False
+
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                'UPDATE password_reset_code SET used_at = NOW() WHERE id = %s AND used_at IS NULL',
+                (reset_id,),
+            )
+            return cursor.rowcount == 1
+
+
+def update_user_password(user_id: int, password_hash: str) -> bool:
+    if not ensure_user_email_schema():
+        return False
+
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                'UPDATE system_user SET password_hash = %s WHERE id = %s',
+                (password_hash, user_id),
+            )
+            return cursor.rowcount >= 0
+
