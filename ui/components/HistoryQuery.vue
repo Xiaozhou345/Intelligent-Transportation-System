@@ -18,7 +18,7 @@ const events = ref([])
 const loading = ref(false)
 
 const eventOptions = [
-  { label: '全部事件', value: '' },
+  { label: '全部业务事件', value: '' },
   { label: '车辆检测', value: 'vehicle_detection' },
   { label: '车牌识别', value: 'plate_recognition' },
   { label: '拥堵分析', value: 'traffic_density' },
@@ -118,10 +118,32 @@ const downloadFile = (filename, content, mimeType) => {
   URL.revokeObjectURL(url)
 }
 
+const sanitizeEventForExport = (event) => {
+  const data = { ...(event.data || {}) }
+  delete data.image
+  delete data.frame
+  delete data.frame_image
+  delete data.image_base64
+  return {
+    time: formatTime(event.timestamp),
+    type: eventTypeText[event.event_type] || event.event_type || '',
+    device: event.device_id || '',
+    status: event.status || 'normal',
+    detail: formatDetail(event),
+    data
+  }
+}
+
 const exportJson = () => {
+  const exportData = {
+    exportedAt: new Date().toISOString(),
+    source: 'business_history_events',
+    count: filteredEvents.value.length,
+    records: filteredEvents.value.map(sanitizeEventForExport)
+  }
   downloadFile(
     `its-events-${Date.now()}.json`,
-    JSON.stringify(filteredEvents.value, null, 2),
+    JSON.stringify(exportData, null, 2),
     'application/json;charset=utf-8'
   )
 }
@@ -237,7 +259,7 @@ const formatDetail = (event) => {
     <div class="section-header">
       <h2>历史查询</h2>
       <div class="header-actions">
-        <span>最近 10 条事件</span>
+        <span>最近 10 条业务事件</span>
         <ElButton size="small" @click="exportCsv">CSV</ElButton>
         <ElButton size="small" @click="exportJson">JSON</ElButton>
       </div>

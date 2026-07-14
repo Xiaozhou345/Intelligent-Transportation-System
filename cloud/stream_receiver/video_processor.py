@@ -2760,8 +2760,8 @@ class VideoProcessor:
             self.socketio.emit('analysis_result', result)
             print(f"推送结果: {event_type}")
 
-            # video_overlay / connection-like transient messages 不入库
-            if event_type not in {'video_overlay', 'anomaly_calibration', 'video_segment_uploaded'}:
+            # video_frame / video_overlay / connection-like transient messages 不入库
+            if event_type not in {'video_frame', 'video_overlay', 'anomaly_calibration', 'video_segment_uploaded'}:
                 mysql_client.insert_recognition_event(event_type, result.get('device_id'), result, scene_id=scene_id)
         except Exception as e:
             print(f"推送结果失败: {str(e)}")

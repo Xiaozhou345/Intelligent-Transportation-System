@@ -600,9 +600,15 @@ def get_history_events():
                 where_clauses = []
                 params = []
 
+                technical_event_types = ['video_frame', 'video_overlay', 'system_status', 'connection_status', 'devices_list']
+                include_technical = request.args.get('include_technical') == '1'
                 if event_type:
                     where_clauses.append('event_type = %s')
                     params.append(event_type)
+                elif not include_technical:
+                    placeholders = ', '.join(['%s'] * len(technical_event_types))
+                    where_clauses.append(f'event_type NOT IN ({placeholders})')
+                    params.extend(technical_event_types)
 
                 if device_id:
                     where_clauses.append('device_id = %s')
